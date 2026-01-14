@@ -1,15 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 
-// Initialize ZAI instance per request (better for Vercel serverless)
+// Global cache for ZAI instance
+let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null
+let isInitializing = false
+let initPromise: Promise<any> | null = null
+
+// Initialize ZAI instance with proper error handling
 async function getZAIInstance() {
-  try {
-    const zai = await ZAI.create()
-    return zai
-  } catch (error) {
-    console.error('Failed to initialize ZAI instance:', error)
-    throw new Error('Failed to initialize AI service')
+  // Return cached instance if available
+  if (zaiInstance) {
+    return zaiInstance
   }
+
+  // Return existing initialization promise if in progress
+  if (isInitializing && initPromise) {
+    await initPromise
+    return zaiInstance
+  }
+
+  // Start new initialization
+  isInitializing = true
+  initPromise = (async () => {
+    try {
+      console.log('Initializing ZAI SDK...')
+      const zai = await ZAI.create()
+      console.log('ZAI SDK initialized successfully')
+      zaiInstance = zai
+      isInitializing = false
+      return zai
+    } catch (error) {
+      console.error('Failed to initialize ZAI SDK:', error)
+      isInitializing = false
+      zaiInstance = null
+      throw new Error('Failed to initialize AI service. Please check configuration and try again.')
+    }
+  })()
+
+  return initPromise
 }
 
 interface ImageAnalysis {
@@ -62,6 +90,7 @@ async function analyzeImageWithVLM(imageUrl: string): Promise<ImageAnalysis> {
 
 Focus on elements that can be replicated in AI image generation. Be specific and descriptive.`
 
+    console.log('Calling VLM API...')
     const response = await zai.chat.completions.createVision({
       messages: [
         {
@@ -91,7 +120,7 @@ Focus on elements that can be replicated in AI image generation. Be specific and
 
     console.log('VLM raw response length:', content.length)
 
-    // Try to parse JSON from the response
+    // Try to parse JSON from response
     try {
       // Extract JSON if it's wrapped in markdown code blocks
       let jsonStr = content.trim()
@@ -110,11 +139,15 @@ Focus on elements that can be replicated in AI image generation. Be specific and
       return parsed as ImageAnalysis
     } catch (parseError) {
       console.error('Failed to parse VLM JSON response:', parseError)
-      console.error('VLM Response:', content.substring(0, 200) + '...')
+      console.error('VLM Response sample:', content.substring(0, 300) + '...')
       throw new Error('Failed to parse image analysis from AI response')
     }
   } catch (error) {
     console.error('VLM Analysis Error:', error)
+    if (error instanceof Error) {
+      console.error('Error message:', error.message)
+      console.error('Error stack:', error.stack)
+    }
     throw error
   }
 }
@@ -154,6 +187,7 @@ Generate a natural, descriptive prompt that captures all these visual elements. 
 
 Remember: This prompt will be used in Gemini Image generation where the user will upload their own face photo, so the prompt needs to instruct the AI to use that face while matching all the other visual characteristics.`
 
+    console.log('Calling LLM API...')
     const response = await zai.chat.completions.create({
       messages: [
         {
@@ -177,6 +211,10 @@ Remember: This prompt will be used in Gemini Image generation where the user wil
     return prompt.trim()
   } catch (error) {
     console.error('LLM Generation Error:', error)
+    if (error instanceof Error) {
+      console.error('Error message:', error.message)
+      console.error('Error stack:', error.stack)
+    }
     throw error
   }
 }
@@ -192,9 +230,18 @@ const DEFAULT_TIPS = [
 
 export async function POST(request: NextRequest) {
   const requestId = Math.random().toString(36).substring(7)
-  console.log(`[${requestId}] Starting /api/analyze request`)
+  console.log(`[${requestId}] ========== Starting /api/analyze request ==========`)
+  console.log(`[${requestId}] Method: ${request.method}`)
 
   try {
+    // Check request method
+    if (request.method !== 'POST') {
+      return NextResponse.json(
+        { success: false, error: 'Method not allowed. Use POST.' },
+        { status: 405 }
+      )
+    }
+
     // Parse request body
     const body = await request.json()
     const { image } = body
@@ -232,10 +279,11 @@ export async function POST(request: NextRequest) {
       tips: DEFAULT_TIPS
     }
 
-    console.log(`[${requestId}] Request completed successfully`)
+    console.log(`[${requestId}] ========== Request completed successfully ==========`)
     return NextResponse.json(result)
   } catch (error) {
-    console.error(`[${requestId}] Error in /api/analyze:`, error)
+    console.error(`[${requestId}] ========== Error in /api/analyze ==========`)
+    console.error(`[${requestId}] Error:`, error)
 
     // Determine appropriate error message
     let errorMessage = 'Oops! Something went wrong. Please try again.'
@@ -249,14 +297,17 @@ export async function POST(request: NextRequest) {
       } else if (error.message.includes('Failed to generate')) {
         errorMessage = 'Failed to generate prompt. Please try again.'
       } else if (error.message.includes('Failed to initialize')) {
-        errorMessage = 'AI service initialization failed. Please try again.'
+        errorMessage = 'AI service initialization failed. Please try again in a moment.'
       } else if (error.message.includes('rate limit')) {
         errorMessage = 'Too many requests. Please wait a moment and try again.'
       } else if (error.message.includes('timeout')) {
         errorMessage = 'Request timed out. Please try with a smaller image.'
+      } else if (error.message.includes('Network')) {
+        errorMessage = 'Network error. Please check your connection and try again.'
       }
     }
 
+    console.error(`[${requestId}] Returning error to client:`, errorMessage)
     return NextResponse.json(
       { success: false, error: errorMessage },
       { status: 500 }
