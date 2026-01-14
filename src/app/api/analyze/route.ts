@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 // Azure credentials desde variables de entorno
 const AZURE_VISION_KEY = process.env.AZURE_VISION_KEY!;
-const AZURE_ANALYZE_URL = `${process.env.AZURE_ENDPOINT}/vision/v3.2/analyze?visualFeatures=Description,Tags,Categories,ImageType,Color`;
+const AZURE_ANALYZE_URL = `${process.env.AZURE_ENDPOINT}/vision/v3.2/analyze?visualFeatures=Description,Tags,Categories,Color,Objects,Faces,Adult,ImageType`;
 
+// Interfaces
 interface ImageAnalysis {
   type: string;
   style: string;
@@ -12,6 +13,7 @@ interface ImageAnalysis {
   colors: string;
   mood: string;
   realism: string;
+  detailedDescription: string;
 }
 
 const DEFAULT_TIPS = [
@@ -34,7 +36,7 @@ function validateImageBase64(imageData: string) {
   return { valid: true };
 }
 
-// Convertir base64 a ArrayBuffer para Azure
+// Convertir base64 a ArrayBuffer
 function base64ToArrayBuffer(base64: string) {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -43,7 +45,7 @@ function base64ToArrayBuffer(base64: string) {
   return bytes;
 }
 
-// Función que llama a Azure Vision usando array buffer
+// Función que llama a Azure Vision usando base64
 async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAnalysis> {
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
   const imageBuffer = base64ToArrayBuffer(base64Data);
@@ -66,31 +68,34 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   }
 
   const data = await response.json();
-
   if (!data) throw new Error('Azure Vision API returned empty response');
 
-  // ---------- Mantengo tu lógica original ----------
-  const imageTypeRaw =
-    data.imageType?.lineDrawingType === 1 || data.imageType?.clipArtType === 1
-      ? 'Illustration'
-      : 'Photo';
+  // ---------- Análisis detallado ----------
   const caption = data.description?.captions?.[0]?.text || '';
-  const captionLower = caption.toLowerCase();
   const tags = data.tags?.map((t: any) => t.name) || [];
   const tagsText = tags.join(', ').toLowerCase();
   const dominantColors = data.color?.dominantColors || [];
+  const imageTypeRaw = data.imageType?.clipArtType === 1 ? 'Illustration' : 'Photo';
 
-  // Tipo
+  // Rostros y expresión
+  const faces = data.faces || [];
+  const faceDescription = faces.map((f: any) => {
+    const emotions = f.emotion ? Object.entries(f.emotion).sort((a,b)=>b[1]-a[1])[0][0] : '';
+    return `Age ${f.age}, ${f.gender}, emotion: ${emotions}`;
+  }).join('; ');
+
+  // Objetos detectados (ropa, accesorios, fondo)
+  const objects = data.objects || [];
+  const objectsDesc = objects.map((o: any) => `${o.object} at [${o.rectangle.left},${o.rectangle.top},${o.rectangle.w},${o.rectangle.h}]`).join('; ');
+
+  // Tipo y estilo
   let type = imageTypeRaw;
   if (tagsText.includes('anime') || tagsText.includes('manga')) type = 'Anime';
   else if (imageTypeRaw.toLowerCase().includes('digital')) type = 'Digital Art';
 
-  // Estilo
   let style = 'Professional photography';
-  if (captionLower.includes('portrait') || tagsText.includes('portrait')) style = 'Professional portrait photography';
-  else if (captionLower.includes('landscape') || tagsText.includes('landscape')) style = 'Landscape photography';
-  else if (captionLower.includes('studio') || tagsText.includes('studio')) style = 'Studio photography';
-  else if (captionLower.includes('cinematic') || captionLower.includes('dramatic')) style = 'Cinematic photography';
+  if (caption.toLowerCase().includes('portrait') || tagsText.includes('portrait')) style = 'Professional portrait photography';
+  else if (caption.toLowerCase().includes('studio') || tagsText.includes('studio')) style = 'Studio photography';
   else if (type === 'Illustration') style = 'Digital illustration with clean lines';
   else if (type === 'Digital Art') style = 'Digital artwork with rich details';
   else if (type === 'Anime') style = 'Anime-style artwork';
@@ -98,58 +103,60 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
 
   // Lighting
   let lighting = 'Balanced natural lighting';
-  if (captionLower.includes('bright') || captionLower.includes('sunny') || captionLower.includes('sunlight')) lighting = 'Bright and well-lit scene';
-  else if (captionLower.includes('backlit')) lighting = 'Backlit subject with dramatic effect';
-  else if (captionLower.includes('dark') || captionLower.includes('shadowy')) lighting = 'Low light or moody atmosphere';
-  else if (captionLower.includes('studio lighting') || captionLower.includes('artificial')) lighting = 'Studio lighting with controlled shadows';
-  else if (captionLower.includes('golden')) lighting = 'Golden hour warm lighting';
+  if (caption.toLowerCase().includes('bright') || caption.toLowerCase().includes('sunny')) lighting = 'Bright and well-lit scene';
+  else if (caption.toLowerCase().includes('dark') || caption.toLowerCase().includes('shadowy')) lighting = 'Low light or moody atmosphere';
+  else if (caption.toLowerCase().includes('studio')) lighting = 'Studio lighting with controlled shadows';
 
   // Composición
   let composition = 'Well-composed with balanced elements';
-  if (captionLower.includes('close-up') || tagsText.includes('close-up')) composition = 'Close-up shot';
-  else if (captionLower.includes('centered') || captionLower.includes('center')) composition = 'Centered subject with balanced framing';
+  if (caption.toLowerCase().includes('close-up') || tagsText.includes('close-up')) composition = 'Close-up shot';
+  else if (caption.toLowerCase().includes('centered') || caption.toLowerCase().includes('center')) composition = 'Centered subject with balanced framing';
 
   // Colores
   let colors = 'Natural and balanced color palette';
-  if (dominantColors.length > 0) {
-    const colorNames = dominantColors.slice(0, 5).join(', ');
-    if (colorNames.length > 0) colors = `Color palette featuring: ${colorNames}`;
-  }
+  if (dominantColors.length > 0) colors = `Color palette featuring: ${dominantColors.join(', ')}`;
 
   // Mood
   let mood = 'Neutral and balanced';
-  if (captionLower.includes('happy') || captionLower.includes('joyful') || captionLower.includes('smile')) mood = 'Cheerful and positive';
-  else if (captionLower.includes('sad') || captionLower.includes('melancholic')) mood = 'Moody and melancholic';
-  else if (captionLower.includes('dramatic') || captionLower.includes('intense')) mood = 'Dramatic and intense';
-  else if (captionLower.includes('peaceful') || captionLower.includes('calm') || captionLower.includes('serene')) mood = 'Peaceful and serene';
-  else if (captionLower.includes('romantic') || captionLower.includes('intimate')) mood = 'Romantic and intimate';
+  if (caption.toLowerCase().includes('happy') || caption.toLowerCase().includes('smile')) mood = 'Cheerful and positive';
+  else if (caption.toLowerCase().includes('sad') || caption.toLowerCase().includes('melancholic')) mood = 'Moody and melancholic';
+  else if (caption.toLowerCase().includes('dramatic') || caption.toLowerCase().includes('intense')) mood = 'Dramatic and intense';
 
   // Realismo
   let realism = 'High realism with natural textures';
   if (type === 'Illustration') realism = 'Medium realism - digital illustration';
   else if (type === 'Digital Art') realism = 'Highly detailed digital artwork';
   else if (type === 'Anime') realism = 'Stylized anime aesthetic';
-  else if (type === '3D Render') realism = 'Photorealistic 3D rendering';
 
-  return { type, style, lighting, composition, colors, mood, realism };
+  // Descripción ultra detallada
+  const detailedDescription = `
+Caption: ${caption}
+Faces: ${faceDescription || 'No faces detected'}
+Objects: ${objectsDesc || 'No objects detected'}
+Colors: ${colors}
+Tags: ${tagsText}
+Categories: ${data.categories?.map((c:any)=>c.name).join(', ') || 'N/A'}
+`;
+
+  return { type, style, lighting, composition, colors, mood, realism, detailedDescription };
 }
 
-// Generar prompt
+// Generar prompt ultra detallado
 function generatePromptForGemini(analysis: ImageAnalysis): string {
-  return `Create a ${analysis.type.toLowerCase()} in ${analysis.style.toLowerCase()} style, featuring [USER FACE] as the main subject.
+  return `
+Create a highly realistic image based on the following analysis:
 
-The image should use ${analysis.lighting.toLowerCase()}, with a ${analysis.composition.toLowerCase()} approach.
+- Type/Style: ${analysis.type}, ${analysis.style}
+- Lighting: ${analysis.lighting}
+- Composition: ${analysis.composition}
+- Mood: ${analysis.mood}
+- Realism: ${analysis.realism}
+- Colors: ${analysis.colors}
+- Detailed scene analysis:
+${analysis.detailedDescription}
 
-The color palette should consist of ${analysis.colors.toLowerCase()}, creating a ${analysis.mood.toLowerCase()} atmosphere. The overall ${analysis.realism.toLowerCase()} quality with natural textures and professional lighting.
-
-Key visual elements to include:
-- ${analysis.lighting.toLowerCase()}
-- ${analysis.composition.toLowerCase()}
-- Natural skin tones and realistic features
-- Appropriate background context
-- Professional color grading matching the ${analysis.style.toLowerCase()} aesthetic
-
-Important: Use the user's uploaded face photo as a base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`;
+Important: Use the user's uploaded face photo as a base, matching the lighting, angle, pose, mood, and all details described above to create a cohesive, realistic portrait. Maintain natural skin texture, realistic hair and clothing details, accurate background, and proper depth of field.
+`;
 }
 
 // POST handler
@@ -172,10 +179,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('[POST] Error:', error.message || error);
-    return NextResponse.json(
-      { success: false, error: 'Something went wrong. Please try again.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: 'Something went wrong. Please try again.' }, { status: 500 });
   }
 }
 
