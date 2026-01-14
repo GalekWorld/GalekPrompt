@@ -100,17 +100,18 @@ export default function Home() {
         body: JSON.stringify({ image: imagePreview }),
       })
 
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.message || 'Failed to analyze image')
+      const data = await response.json()
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to analyze image')
       }
 
-      const data = await response.json()
       setResult(data)
       toast.success('✨ Your optimized prompt is ready!')
     } catch (error) {
       console.error('Analysis error:', error)
-      toast.error(error instanceof Error ? error.message : 'Oops! Something went wrong. Please try again.')
+      const errorMessage = error instanceof Error ? error.message : 'Oops! Something went wrong. Please try again.'
+      toast.error(errorMessage)
     } finally {
       setIsAnalyzing(false)
     }
