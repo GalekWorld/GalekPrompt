@@ -188,5 +188,3 @@ export async function OPTIONS() {
     }
   });
 }
-
-}
