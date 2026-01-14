@@ -91,5 +91,58 @@
     "tailwindcss": "^4",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
-  }
+  },
+  {
+    "apiVersion": "2025-06-01",
+    "id": "/subscriptions/8aea718b-0de3-4813-bd37-c8443e38b2c8/resourceGroups/galekvision/providers/Microsoft.CognitiveServices/accounts/Galek",
+    "name": "Galek",
+    "type": "microsoft.cognitiveservices/accounts",
+    "sku": {
+        "name": "F0"
+    },
+    "kind": "ComputerVision",
+    "location": "northeurope",
+    "tags": {},
+    "identity": {
+        "type": "None"
+    },
+    "properties": {
+        "endpoint": "https://galek.cognitiveservices.azure.com/",
+        "internalId": "72b004affdaa464a8f4372bca9d13af5",
+        "dateCreated": "2026-01-14T13:31:06.918Z",
+        "isMigrated": false,
+        "customSubDomainName": "galek",
+        "networkAcls": {
+            "defaultAction": "Allow",
+            "virtualNetworkRules": [],
+            "ipRules": []
+        },
+        "allowProjectManagement": false,
+        "privateEndpointConnections": [],
+        "publicNetworkAccess": "Enabled",
+        "capabilities": [
+            {
+                "name": "VirtualNetworks"
+            },
+            {
+                "name": "Container",
+                "value": "ComputerVision.VideoAnalytics,ComputerVision.ComputerVisionRead,ComputerVision.ocr,ComputerVision.readfile,ComputerVision.readfiledsd,ComputerVision.recognizetext,ComputerVision.ComputerVision,ComputerVision.ocrlayoutworker,ComputerVision.ocrcontroller,ComputerVision.ocrdispatcher,ComputerVision.ocrbillingprocessor,ComputerVision.ocranalyzer,ComputerVision.ocrpagesplitter,ComputerVision.ocrapi,ComputerVision.ocrengineworker"
+            }
+        ],
+        "endpoints": {
+            "Computer Vision": "https://galek.cognitiveservices.azure.com/",
+            "Container": "https://galek.cognitiveservices.azure.com/"
+        },
+        "provisioningState": "Succeeded"
+    },
+    "systemData": {
+        "createdBy": "pollonlargo27@gmail.com",
+        "createdByType": "User",
+        "createdAt": "2026-01-14T13:31:06.613Z",
+        "lastModifiedBy": "pollonlargo27@gmail.com",
+        "lastModifiedByType": "User",
+        "lastModifiedAt": "2026-01-14T13:31:06.613Z"
+    },
+    "etag": "\"a301fa63-0000-0c00-0000-69679a9c0000\""
+}
 }
