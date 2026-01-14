@@ -3,7 +3,7 @@ import { ImageAnalysisClient, AzureKeyCredential } from '@azure/cognitiveservice
 
 // Azure Computer Vision API credentials
 const AZURE_VISION_KEY = '1pVJmutTKV1Iz2V9yngrzi3UIOtxVbFje54PEwyKIK1iFXQNXwsVJQQJ99CAACi5YpzXJ3w3AAAFACOGomUn algo mas'
-const AZURE_ENDPOINT = 'https://galek.cognitiveservices.azure.com'
+const AZURE_ENDPOINT = 'https://galek.cognitiveservices.azure.com/'
 
 interface ImageAnalysis {
   type: string
