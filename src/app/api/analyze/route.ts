@@ -13,7 +13,9 @@ interface ImageAnalysis {
   colors: string;
   mood: string;
   realism: string;
-  detailedDescription: string;
+  personDescription: string;
+  objectsDescription: string;
+  environmentDescription: string;
 }
 
 const DEFAULT_TIPS = [
@@ -45,12 +47,10 @@ function base64ToArrayBuffer(base64: string) {
   return bytes;
 }
 
-// Función que llama a Azure Vision usando base64
+// Analizar imagen con Azure Vision
 async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAnalysis> {
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
   const imageBuffer = base64ToArrayBuffer(base64Data);
-
-  console.log('[Vision] Sending image to Azure...');
 
   const response = await fetch(AZURE_ANALYZE_URL, {
     method: 'POST',
@@ -70,92 +70,86 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   const data = await response.json();
   if (!data) throw new Error('Azure Vision API returned empty response');
 
-  // ---------- Análisis detallado ----------
+  // ----------- PERSON / FACES -----------
+  const faces = data.faces || [];
+  const personDescription = faces.map((f: any, i: number) => {
+    const emotions = f.emotion ? Object.entries(f.emotion).sort((a,b)=>b[1]-a[1])[0][0] : '';
+    return `Person ${i+1}: Age ${f.age}, ${f.gender}, emotion: ${emotions}, face rectangle [${f.faceRectangle.left},${f.faceRectangle.top},${f.faceRectangle.width},${f.faceRectangle.height}]`;
+  }).join('\n') || 'No faces detected';
+
+  // ----------- OBJECTS -----------
+  const objects = data.objects || [];
+  const objectsDescription = objects.map((o: any) => {
+    return `${o.object} located at [${o.rectangle.left},${o.rectangle.top},${o.rectangle.w},${o.rectangle.h}]`;
+  }).join('\n') || 'No prominent objects detected';
+
+  // ----------- ENVIRONMENT / SCENE -----------
   const caption = data.description?.captions?.[0]?.text || '';
   const tags = data.tags?.map((t: any) => t.name) || [];
   const tagsText = tags.join(', ').toLowerCase();
   const dominantColors = data.color?.dominantColors || [];
-  const imageTypeRaw = data.imageType?.clipArtType === 1 ? 'Illustration' : 'Photo';
 
-  // Rostros y expresión
-  const faces = data.faces || [];
-  const faceDescription = faces.map((f: any) => {
-    const emotions = f.emotion ? Object.entries(f.emotion).sort((a,b)=>b[1]-a[1])[0][0] : '';
-    return `Age ${f.age}, ${f.gender}, emotion: ${emotions}`;
-  }).join('; ');
+  let environmentDescription = `Scene summary: ${caption}. `;
+  if (dominantColors.length) environmentDescription += `Dominant colors: ${dominantColors.join(', ')}. `;
+  if (tags.length) environmentDescription += `Tags: ${tagsText}. `;
+  if (data.categories?.length) environmentDescription += `Categories: ${data.categories.map((c:any)=>c.name).join(', ')}. `;
 
-  // Objetos detectados (ropa, accesorios, fondo)
-  const objects = data.objects || [];
-  const objectsDesc = objects.map((o: any) => `${o.object} at [${o.rectangle.left},${o.rectangle.top},${o.rectangle.w},${o.rectangle.h}]`).join('; ');
-
-  // Tipo y estilo
-  let type = imageTypeRaw;
+  // ----------- TYPE, STYLE, LIGHTING, COMPOSITION, MOOD, REALISM -----------
+  let type = data.imageType?.clipArtType === 1 ? 'Illustration' : 'Photo';
   if (tagsText.includes('anime') || tagsText.includes('manga')) type = 'Anime';
-  else if (imageTypeRaw.toLowerCase().includes('digital')) type = 'Digital Art';
+  else if (type.toLowerCase().includes('digital')) type = 'Digital Art';
 
   let style = 'Professional photography';
   if (caption.toLowerCase().includes('portrait') || tagsText.includes('portrait')) style = 'Professional portrait photography';
-  else if (caption.toLowerCase().includes('studio') || tagsText.includes('studio')) style = 'Studio photography';
-  else if (type === 'Illustration') style = 'Digital illustration with clean lines';
-  else if (type === 'Digital Art') style = 'Digital artwork with rich details';
-  else if (type === 'Anime') style = 'Anime-style artwork';
-  else if (type === '3D Render') style = '3D rendered image';
+  else if (caption.toLowerCase().includes('studio')) style = 'Studio photography';
 
-  // Lighting
   let lighting = 'Balanced natural lighting';
   if (caption.toLowerCase().includes('bright') || caption.toLowerCase().includes('sunny')) lighting = 'Bright and well-lit scene';
   else if (caption.toLowerCase().includes('dark') || caption.toLowerCase().includes('shadowy')) lighting = 'Low light or moody atmosphere';
   else if (caption.toLowerCase().includes('studio')) lighting = 'Studio lighting with controlled shadows';
 
-  // Composición
   let composition = 'Well-composed with balanced elements';
   if (caption.toLowerCase().includes('close-up') || tagsText.includes('close-up')) composition = 'Close-up shot';
   else if (caption.toLowerCase().includes('centered') || caption.toLowerCase().includes('center')) composition = 'Centered subject with balanced framing';
 
-  // Colores
   let colors = 'Natural and balanced color palette';
-  if (dominantColors.length > 0) colors = `Color palette featuring: ${dominantColors.join(', ')}`;
+  if (dominantColors.length) colors = `Color palette featuring: ${dominantColors.join(', ')}`;
 
-  // Mood
   let mood = 'Neutral and balanced';
   if (caption.toLowerCase().includes('happy') || caption.toLowerCase().includes('smile')) mood = 'Cheerful and positive';
   else if (caption.toLowerCase().includes('sad') || caption.toLowerCase().includes('melancholic')) mood = 'Moody and melancholic';
-  else if (caption.toLowerCase().includes('dramatic') || caption.toLowerCase().includes('intense')) mood = 'Dramatic and intense';
 
-  // Realismo
   let realism = 'High realism with natural textures';
   if (type === 'Illustration') realism = 'Medium realism - digital illustration';
   else if (type === 'Digital Art') realism = 'Highly detailed digital artwork';
   else if (type === 'Anime') realism = 'Stylized anime aesthetic';
 
-  // Descripción ultra detallada
-  const detailedDescription = `
-Caption: ${caption}
-Faces: ${faceDescription || 'No faces detected'}
-Objects: ${objectsDesc || 'No objects detected'}
-Colors: ${colors}
-Tags: ${tagsText}
-Categories: ${data.categories?.map((c:any)=>c.name).join(', ') || 'N/A'}
-`;
-
-  return { type, style, lighting, composition, colors, mood, realism, detailedDescription };
+  return { type, style, lighting, composition, colors, mood, realism, personDescription, objectsDescription, environmentDescription };
 }
 
-// Generar prompt ultra detallado
+// Generar prompt ultra detallado tipo ejemplo que me diste
 function generatePromptForGemini(analysis: ImageAnalysis): string {
   return `
-Create a highly realistic image based on the following analysis:
+With the reference image and without changing facial features, create an image using the following detailed analysis:
 
+Person:
+${analysis.personDescription}
+Clothing and accessories: inferred from objects and tags if possible.
+
+Objects / Key Elements:
+${analysis.objectsDescription}
+
+Environment / Scene:
+${analysis.environmentDescription}
+
+Image Attributes:
 - Type/Style: ${analysis.type}, ${analysis.style}
 - Lighting: ${analysis.lighting}
 - Composition: ${analysis.composition}
 - Mood: ${analysis.mood}
 - Realism: ${analysis.realism}
-- Colors: ${analysis.colors}
-- Detailed scene analysis:
-${analysis.detailedDescription}
 
-Important: Use the user's uploaded face photo as a base, matching the lighting, angle, pose, mood, and all details described above to create a cohesive, realistic portrait. Maintain natural skin texture, realistic hair and clothing details, accurate background, and proper depth of field.
+Important: Use the user's uploaded face photo as a base, keeping pose, expression, clothing, accessories, and environment consistent with the original image. Maintain natural textures, realistic lighting, depth, and color accuracy.
 `;
 }
 
@@ -193,4 +187,6 @@ export async function OPTIONS() {
       'Access-Control-Allow-Headers': 'Content-Type'
     }
   });
+}
+
 }
