@@ -35,7 +35,6 @@ function validateImage(imageData: string): { valid: boolean; error?: string } {
 
 // Analyze image with Google Cloud Vision API
 async function analyzeImageWithVision(imageBase64: string): Promise<ImageAnalysis> {
-  // Remove data URI prefix to get just base64
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '')
 
   console.log('[Vision] Starting Google Cloud Vision API call...')
@@ -72,22 +71,21 @@ async function analyzeImageWithVision(imageBase64: string): Promise<ImageAnalysi
     const data = await response.json()
     console.log('[Vision] API Response received')
 
-    // Parse Google Vision response
     const result = data.responses?.[0]
 
     if (!result) {
       throw new Error('No analysis result from Vision API')
     }
 
-    // Extract information from Google Vision
     const labels = result.labelAnnotations || []
     const properties = result.imagePropertiesAnnotation || {}
     const webDetection = result.webDetection || {}
     const safeSearch = result.safeSearchAnnotation || {}
 
-    // Analyze image type
+    // Determine image type
     let type = 'Photo'
-    const objectLabels = labels.map(l => l.description).join(', ').toLowerCase()
+    const objectLabels = labels.map(l => l.description.toLowerCase()).join(', ')
+
     if (objectLabels.includes('illustration') || objectLabels.includes('drawing') || objectLabels.includes('sketch') || objectLabels.includes('cartoon')) {
       type = 'Illustration'
     } else if (objectLabels.includes('painting') || objectLabels.includes('art') || objectLabels.includes('artwork')) {
@@ -98,111 +96,109 @@ async function analyzeImageWithVision(imageBase64: string): Promise<ImageAnalysi
       type = '3D Render'
     }
 
-    // Analyze style
+    // Determine style
     let style = 'Professional photography'
-    if (type === 'Illustration') {
-      style = 'Digital illustration with clean lines and vibrant colors'
-    } else if (type === 'Digital Art') {
-      style = 'Digital artwork with rich details and artistic styling'
-    } else if (type === 'Anime') {
-      style = 'Anime-style artwork with characteristic features and vibrant colors'
-    } else if (type === '3D Render') {
-      style = '3D rendered image with realistic lighting and high detail'
-    } else {
-      // Analyze dominant colors for style
-      const dominantColors = properties.dominantColors?.colors || []
-      const colorCount = dominantColors.length
 
-      if (colorCount === 1 && dominantColors[0].color) {
-        const color = dominantColors[0].color.toLowerCase()
-        if (color.includes('black') || color.includes('gray') || color.includes('white')) {
-          style = 'Black and white photography'
-        } else if (color.includes('red') || color.includes('orange') || color.includes('yellow')) {
-          style = 'Warm-toned photography'
-        } else if (color.includes('blue') || color.includes('cyan') || color.includes('teal')) {
-          style = 'Cool-toned photography'
-        } else if (color.includes('green')) {
-          style = 'Nature photography with vibrant greens'
-        } else if (color.includes('purple') || color.includes('pink')) {
-          style = 'Vibrant and colorful photography'
-        }
-      } else if (colorCount === 2) {
-        style = 'Two-tone color photography'
-      } else if (colorCount > 2) {
-        style = 'Colorful and dynamic photography'
-      }
+    const dominantColors = properties.dominantColors?.colors || []
+    const colorCount = dominantColors.length
 
-      // Check for specific lighting cues from labels
-      if (labels.some(l => l.description.toLowerCase().includes('cinematic'))) {
-        style = 'Cinematic photography with dramatic lighting'
-      } else if (labels.some(l => l.description.toLowerCase().includes('portrait'))) {
-        style = 'Professional portrait photography'
-      } else if (labels.some(l => l.description.toLowerCase().includes('landscape'))) {
-        style = 'Landscape photography'
-      } else if (labels.some(l => l.description.toLowerCase().includes('studio'))) {
-        style = 'Studio photography with controlled lighting'
+    if (colorCount === 1 && dominantColors[0].color) {
+      const color = dominantColors[0].color.toLowerCase()
+      if (color.includes('black') || color.includes('gray') || color.includes('white')) {
+        style = 'Black and white photography'
+      } else if (color.includes('red') || color.includes('orange') || color.includes('yellow')) {
+        style = 'Warm-toned photography'
+      } else if (color.includes('blue') || color.includes('cyan') || color.includes('teal')) {
+        style = 'Cool-toned photography'
+      } else if (color.includes('green')) {
+        style = 'Nature photography with vibrant greens'
+      } else if (color.includes('purple') || color.includes('pink')) {
+        style = 'Vibrant and colorful photography'
       }
+    } else if (colorCount === 2) {
+      style = 'Two-tone color photography'
+    } else if (colorCount > 2) {
+      style = 'Colorful and dynamic photography'
     }
 
-    // Analyze lighting
+    const labelsText = labels.map(l => l.description.toLowerCase()).join(', ')
+
+    if (labelsText.includes('cinematic')) {
+      style = 'Cinematic photography with dramatic lighting'
+    } else if (labelsText.includes('portrait')) {
+      style = 'Professional portrait photography'
+    } else if (labelsText.includes('landscape')) {
+      style = 'Landscape photography'
+    } else if (labelsText.includes('studio')) {
+      style = 'Studio photography with controlled lighting'
+    }
+
+    // Determine lighting
     let lighting = 'Balanced natural lighting'
+
     if (properties.brightness === 'VERY_BRIGHT') {
       lighting = 'Very bright and overexposed lighting'
     } else if (properties.brightness === 'BRIGHT') {
       lighting = 'Bright and well-lit scene'
     } else if (properties.brightness === 'UNDEREXPOSED') {
       lighting = 'Underexposed with moody shadows'
-    } else if (labels.some(l => l.description.toLowerCase().includes('golden'))) {
+    }
+
+    if (labelsText.includes('golden')) {
       lighting = 'Golden hour warm lighting'
-    } else if (labels.some(l => l.description.toLowerCase().includes('sunlight'))) {
+    } else if (labelsText.includes('sunlight')) {
       lighting = 'Natural sunlight with soft shadows'
-    } else if (labels.some(l => l.description.toLowerCase().includes('backlit'))) {
+    } else if (labelsText.includes('backlit')) {
       lighting = 'Backlit subject with dramatic effect'
-    } else if (labels.some(l => l.description.toLowerCase().includes('studio'))) {
+    } else if (labelsText.includes('studio')) {
       lighting = 'Studio lighting with controlled shadows'
     }
 
-    // Analyze composition
+    // Determine composition
     let composition = 'Well-composed with balanced elements'
-    if (labels.some(l => l.description.toLowerCase().includes('close-up'))) {
+
+    if (labelsText.includes('close-up')) {
       composition = 'Close-up shot with shallow depth of field'
-    } else if (labels.some(l => l.description.toLowerCase().includes('profile'))) {
+    } else if (labelsText.includes('profile')) {
       composition = 'Side profile view'
-    } else if (labels.some(l => l.description.toLowerCase().includes('macro'))) {
+    } else if (labelsText.includes('macro')) {
       composition = 'Macro photography with extreme detail'
-    } else if (labels.some(l => l.description.toLowerCase().includes('centered'))) {
+    } else if (labelsText.includes('centered')) {
       composition = 'Centered subject with balanced framing'
-    } else if (labels.some(l => l.description.toLowerCase().includes('rule of thirds'))) {
+    } else if (labelsText.includes('rule of thirds')) {
       composition = 'Rule of thirds composition'
     }
 
-    // Analyze colors
+    // Determine colors
     let colors = 'Natural and balanced color palette'
-    const colorNames = dominantColors.map(c => c.color).join(', ')
-    if (colorNames) {
+
+    if (dominantColors.length > 0) {
+      const colorNames = dominantColors.map(c => c.color).join(', ')
       colors = `Color palette featuring: ${colorNames}`
     }
 
-    // Analyze mood
+    // Determine mood
     let mood = 'Neutral and balanced'
-    if (labels.some(l => l.description.toLowerCase().includes('happy'))) {
+
+    if (labelsText.includes('happy') || labelsText.includes('joyful')) {
       mood = 'Cheerful and positive'
-    } else if (labels.some(l => l.description.toLowerCase().includes('sad') || labels.some(l => l.description.toLowerCase().includes('melancholy'))) {
+    } else if (labelsText.includes('sad') || labelsText.includes('melancholy')) {
       mood = 'Moody and melancholic'
-    } else if (labels.some(l => l.description.toLowerCase().includes('dramatic'))) {
+    } else if (labelsText.includes('dramatic')) {
       mood = 'Dramatic and intense'
-    } else if (labels.some(l => l.description.toLowerCase().includes('peaceful') || labels.some(l => l.description.toLowerCase().includes('calm'))) {
+    } else if (labelsText.includes('peaceful') || labelsText.includes('calm')) {
       mood = 'Peaceful and serene'
-    } else if (labels.some(l => l.description.toLowerCase().includes('exciting') || labels.some(l => l.description.toLowerCase().includes('dynamic'))) {
+    } else if (labelsText.includes('exciting') || labelsText.includes('dynamic')) {
       mood = 'Energetic and dynamic'
-    } else if (labels.some(l => l.description.toLowerCase().includes('romantic'))) {
+    } else if (labelsText.includes('romantic')) {
       mood = 'Romantic and intimate'
-    } else if (labels.some(l => l.description.toLowerCase().includes('professional') || labels.some(l => l.description.toLowerCase().includes('elegant'))) {
+    } else if (labelsText.includes('professional') || labelsText.includes('elegant')) {
       mood = 'Professional and elegant'
     }
 
-    // Analyze realism
+    // Determine realism
     let realism = 'High realism with natural textures'
+
     if (type === 'Illustration') {
       realism = 'Medium realism - clean digital illustration'
     } else if (type === 'Digital Art') {
@@ -211,8 +207,6 @@ async function analyzeImageWithVision(imageBase64: string): Promise<ImageAnalysi
       realism = 'Stylized anime aesthetic'
     } else if (type === '3D Render') {
       realism = 'Photorealistic 3D rendering'
-    } else {
-      realism = 'High realism professional photography'
     }
 
     const analysis = {
@@ -225,16 +219,15 @@ async function analyzeImageWithVision(imageBase64: string): Promise<ImageAnalysi
       realism
     }
 
-    console.log('[Vision] ✓ Analysis complete:', {
+    console.log('[Vision] Analysis complete:', {
       type: analysis.type,
-      style: analysis.style,
-      lighting: analysis.lighting.substring(0, 50)
+      style: analysis.style
     })
 
     return analysis
 
   } catch (error: any) {
-    console.error('[Vision] ✗ Error:', error?.message || error)
+    console.error('[Vision] Error:', error?.message || error)
     throw new Error('Failed to analyze image with Vision API')
   }
 }
@@ -243,7 +236,7 @@ async function analyzeImageWithVision(imageBase64: string): Promise<ImageAnalysi
 async function generatePromptForGemini(analysis: ImageAnalysis): Promise<string> {
   console.log('[Prompt] Generating optimized Gemini prompt...')
 
-  const prompt = `Create a ${analysis.type.toLowerCase()} in the style of ${analysis.style.toLowerCase()}, featuring [USER FACE] as the main subject.
+  const prompt = `Create a ${analysis.type.toLowerCase()} in ${analysis.style.toLowerCase()} style, featuring [USER FACE] as the main subject.
 
 The image should use ${analysis.lighting.toLowerCase()}, with a ${analysis.composition.toLowerCase()} approach.
 
@@ -256,16 +249,16 @@ Key visual elements to include:
 - Appropriate background context
 - Professional color grading matching the ${analysis.style.toLowerCase()} aesthetic
 
-Important: Use the user's uploaded face photo as a base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`
+Important: Use the user's uploaded face photo as the base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`
 
-  console.log('[Prompt] ✓ Prompt generated, length:', prompt.length)
+  console.log('[Prompt] Prompt generated, length:', prompt.length)
 
   return prompt
 }
 
 const DEFAULT_TIPS = [
   'Upload a clear photo of your face first in Gemini',
-  'The prompt uses [USER FACE] placeholder — Gemini will use your uploaded photo',
+  'The prompt uses [USER FACE] placeholder - Gemini will use your uploaded photo',
   'Paste entire prompt as-is, don\'t edit it',
   'If results aren\'t perfect, try regenerating the prompt',
   'For best results, use a well-lit, front-facing photo of your face'
@@ -293,21 +286,21 @@ export async function POST(request: NextRequest) {
     // Validate
     const validation = validateImage(image)
     if (!validation.valid) {
-      console.log(`[${requestId}] ✗ Validation failed:`, validation.error)
+      console.log(`[${requestId}] Validation failed:`, validation.error)
       return NextResponse.json({ success: false, error: validation.error }, { status: 400 })
     }
 
-    console.log(`[${requestId}] ✓ Validation passed`)
+    console.log(`[${requestId}] Validation passed`)
 
     // Analyze image with Google Cloud Vision API
-    console.log(`[${requestId}] → Vision Analysis (Google Cloud Vision API)...`)
+    console.log(`[${requestId}] Starting Vision Analysis...`)
     const analysis = await analyzeImageWithVision(image)
-    console.log(`[${requestId}] ✓ Vision complete:`, analysis.type, analysis.style)
+    console.log(`[${requestId}] Vision complete:`, analysis.type, analysis.style)
 
     // Generate prompt
-    console.log(`[${requestId}] → Prompt Generation...`)
+    console.log(`[${requestId}] Generating prompt...`)
     const prompt = await generatePromptForGemini(analysis)
-    console.log(`[${requestId}] ✓ Prompt complete:`, prompt.length, 'chars')
+    console.log(`[${requestId}] Prompt complete:`, prompt.length, 'chars')
 
     const result = {
       success: true,
@@ -332,7 +325,7 @@ export async function POST(request: NextRequest) {
         errorMessage = 'Could not analyze image. Please try with a different image.'
       } else if (error.message.includes('quota') || error.message.includes('429')) {
         errorMessage = 'API quota exceeded. Please try again later today.'
-      } else if (error.message.includes('key')) {
+      } else if (error.message.includes('key') || error.message.includes('403') || error.message.includes('401')) {
         errorMessage = 'Invalid API key. Please check Google Cloud Vision configuration.'
       } else if (error.message.includes('timeout')) {
         errorMessage = 'Request timed out. Please try with a smaller image.'
