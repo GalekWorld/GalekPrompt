@@ -49,7 +49,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
       method: 'POST',
       headers: {
         'Content-Type': 'application/octet-stream',
-        'Ocp-Apim-Subscription-Key': AZURE_VISION_KEY,
+        'Ocp-Apim-Subscription-Key': AZURE_VISION_KEY
       },
       body: JSON.stringify({
         url: `data:image/jpeg;base64,${base64Data}`
@@ -81,7 +81,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
     console.log('[Vision] Tags detected:', data.tags?.length || 0)
     console.log('[Vision] Caption:', data.captionResult?.text?.substring(0, 100) + '...')
 
-    // Analyze image type
+    // Determine image type
     let type = 'Photo'
 
     // Check for specific visual styles in categories
@@ -105,43 +105,24 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
       style = 'Landscape photography'
     } else if (tagsText.includes('studio') || tagsText.includes('indoor')) {
       style = 'Studio photography'
-    } else if (tagsText.includes('outdoor') || tagsText.includes('city')) {
-      style = 'Outdoor photography'
-    } else if (tagsText.includes('night') || tagsText.includes('dark')) {
-      style = 'Night or low-light photography'
     } else if (tagsText.includes('cinematic') || tagsText.includes('dramatic')) {
       style = 'Cinematic photography'
     }
 
-    // Analyze colors
-    let colors = 'Natural and balanced color palette'
-
-    if (tagsText.includes('black') || tagsText.includes('white') || tagsText.includes('monochrome')) {
-      colors = 'Black and white photography'
-    } else if (tagsText.includes('vibrant') || tagsText.includes('colorful')) {
-      colors = 'Vibrant and colorful photography'
-    } else if (tagsText.includes('warm') || tagsText.includes('golden')) {
-      colors = 'Warm-toned photography'
-    } else if (tagsText.includes('cool') || tagsText.includes('blue') || tagsText.includes('teal')) {
-      colors = 'Cool-toned photography'
-    } else if (tagsText.includes('pastel') || tagsText.includes('soft')) {
-      colors = 'Soft and pastel colors'
-    }
-
-    // Analyze lighting
+    // Determine lighting
     let lighting = 'Balanced natural lighting'
 
-    if (tagsText.includes('bright') || tagsText.includes('overexposed')) {
+    if (tagsText.includes('bright') || tagsText.includes('sunlight') || tagsText.includes('outdoor')) {
       lighting = 'Bright and well-lit scene'
     } else if (tagsText.includes('backlit')) {
       lighting = 'Backlit subject with dramatic effect'
     } else if (tagsText.includes('studio lighting') || tagsText.includes('artificial')) {
       lighting = 'Studio lighting with controlled shadows'
-    } else if (tagsText.includes('sunlight') || tagsText.includes('golden hour')) {
-      lighting = 'Natural sunlight with soft shadows'
+    } else if (tagsText.includes('golden hour')) {
+      lighting = 'Golden hour warm lighting'
     }
 
-    // Analyze composition
+    // Determine composition
     let composition = 'Well-composed with balanced elements'
 
     if (tagsText.includes('close-up') || tagsText.includes('shallow dof')) {
@@ -154,26 +135,41 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
       composition = 'Wide-angle panoramic shot'
     }
 
-    // Analyze mood
+    // Determine colors
+    let colors = 'Natural and balanced color palette'
+
+    if (tagsText.includes('black and white')) {
+      colors = 'Black and white photography'
+    } else if (tagsText.includes('vibrant') || tagsText.includes('colorful')) {
+      colors = 'Vibrant and colorful photography'
+    } else if (tagsText.includes('warm')) {
+      colors = 'Warm-toned photography'
+    } else if (tagsText.includes('cool')) {
+      colors = 'Cool-toned photography'
+    } else if (tagsText.includes('pastel') || tagsText.includes('soft')) {
+      colors = 'Soft and pastel colors'
+    }
+
+    // Determine mood
     let mood = 'Neutral and balanced'
 
-    if (tagsText.includes('happy') || tagsText.includes('joyful') || tagsText.includes('cheerful')) {
+    if (tagsText.includes('happy') || tagsText.includes('joyful')) {
       mood = 'Cheerful and positive'
     } else if (tagsText.includes('sad') || tagsText.includes('melancholy')) {
       mood = 'Moody and melancholic'
-    } else if (tagsText.includes('dramatic') || tagsText.includes('intense') || tagsText.includes('serious')) {
+    } else if (tagsText.includes('dramatic')) {
       mood = 'Dramatic and intense'
-    } else if (tagsText.includes('peaceful') || tagsText.includes('calm') || tagsText.includes('serene')) {
+    } else if (tagsText.includes('peaceful') || tagsText.includes('calm')) {
       mood = 'Peaceful and serene'
-    } else if (tagsText.includes('exciting') || tagsText.includes('dynamic') || tagsText.includes('energetic')) {
+    } else if (tagsText.includes('exciting') || tagsText.includes('dynamic')) {
       mood = 'Energetic and dynamic'
     } else if (tagsText.includes('romantic') || tagsText.includes('intimate')) {
       mood = 'Romantic and intimate'
-    } else if (tagsText.includes('professional') || tagsText.includes('elegant') || tagsText.includes('sophisticated')) {
+    } else if (tagsText.includes('professional') || tagsText.includes('elegant')) {
       mood = 'Professional and elegant'
     }
 
-    // Analyze realism
+    // Determine realism
     let realism = 'High realism with natural textures'
 
     if (type === 'Illustration') {
@@ -182,7 +178,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
       realism = 'Highly detailed digital artwork'
     }
 
-    const analysis = {
+    const analysis: ImageAnalysis = {
       type,
       style,
       lighting,
@@ -192,7 +188,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
       realism
     }
 
-    console.log('[Vision] ✓ Analysis complete:', {
+    console.log('[Vision] Analysis complete:', {
       type: analysis.type,
       style: analysis.style
     })
@@ -200,7 +196,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
     return analysis
 
   } catch (error: any) {
-    console.error('[Vision] ✗ Error:', error?.message || error)
+    console.error('[Vision] Error:', error?.message || error)
     throw new Error('Failed to analyze image with Azure Vision API')
   }
 }
@@ -220,11 +216,11 @@ Key visual elements to include:
 - ${analysis.composition.toLowerCase()}
 - Natural skin tones and realistic features
 - Appropriate background context
-- Professional color grading matching the ${analysis.style.toLowerCase()} aesthetic
+- Professional color grading matching ${analysis.style.toLowerCase()} aesthetic
 
-Important: Use the user's uploaded face photo as a base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`
+Important: Use the user's uploaded face photo as the base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`
 
-  console.log('[Prompt] ✓ Prompt generated, length:', prompt.length)
+  console.log('[Prompt] Prompt generated, length:', prompt.length)
 
   return prompt
 }
@@ -260,21 +256,21 @@ export async function POST(request: NextRequest) {
     // Validate
     const validation = validateImage(image)
     if (!validation.valid) {
-      console.log(`[${requestId}] ✗ Validation failed:`, validation.error)
+      console.log(`[${requestId}] Validation failed:`, validation.error)
       return NextResponse.json({ success: false, error: validation.error }, { status: 400 })
     }
 
-    console.log(`[${requestId}] ✓ Validation passed`)
+    console.log(`[${requestId}] Validation passed`)
 
-    // Analyze
-    console.log(`[${requestId}] → Azure Vision Analysis...`)
+    // Analyze image with Azure Computer Vision API
+    console.log(`[${requestId}] Starting Azure Vision Analysis...`)
     const analysis = await analyzeImageWithAzureVision(image)
-    console.log(`[${requestId}] ✓ Azure Vision complete:`, analysis.type, analysis.style)
+    console.log(`[${requestId}] Azure Vision complete:`, analysis.type, analysis.style)
 
     // Generate prompt
-    console.log(`[${requestId}] → Prompt Generation...`)
+    console.log(`[${requestId}] Generating prompt...`)
     const prompt = await generatePromptForGemini(analysis)
-    console.log(`[${requestId}] ✓ Prompt complete:`, prompt.length, 'chars')
+    console.log(`[${requestId}] Prompt complete:`, prompt.length, 'chars')
 
     const result = {
       success: true,
@@ -296,14 +292,14 @@ export async function POST(request: NextRequest) {
     let errorMessage = 'Something went wrong. Please try again.'
 
     if (error?.message) {
-      if (error.message.includes('API key is invalid')) {
-        errorMessage = 'Azure Vision API key is invalid or has expired. Please check your Azure portal configuration.'
+      if (error.message.includes('Failed to analyze')) {
+        errorMessage = 'Could not analyze image. Please try with a different image.'
       } else if (error.message.includes('quota')) {
-        errorMessage = 'Azure Vision API quota exceeded. Please try again tomorrow.'
+        errorMessage = 'API quota exceeded. Please try again tomorrow.'
+      } else if (error.message.includes('API key is invalid')) {
+        errorMessage = 'Azure Vision API key is invalid or has expired. Please check your Azure portal configuration.'
       } else if (error.message.includes('permission')) {
         errorMessage = 'Azure Vision API permission denied. Please check key permissions in your Azure portal.'
-      } else if (error.message.includes('Failed to analyze')) {
-        errorMessage = 'Could not analyze image. Please try with a different image.'
       } else if (error.message.includes('timeout')) {
         errorMessage = 'Request timed out. Please try with a smaller image.'
       } else if (error.message.includes('Vision API failed')) {
@@ -325,5 +321,4 @@ export async function OPTIONS() {
       'Access-Control-Allow-Headers': 'Content-Type',
     },
   })
-}
 }
