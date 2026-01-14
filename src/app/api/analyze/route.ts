@@ -14,7 +14,6 @@ interface ImageAnalysis {
   realism: string
 }
 
-// Validate image data
 function validateImage(imageData: string): { valid: boolean; error?: string } {
   if (!imageData || typeof imageData !== 'string') {
     return { valid: false, error: 'Invalid image data' }
@@ -34,7 +33,6 @@ function validateImage(imageData: string): { valid: boolean; error?: string } {
   return { valid: true }
 }
 
-// Analyze image with Azure Computer Vision API (REST fetch only - no SDK)
 async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAnalysis> {
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '')
 
@@ -54,8 +52,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
         { type: 'Tags', maxResults: 20 },
         { type: 'Categories', maxResults: 20 },
         { type: 'ImageType', maxResults: 1 },
-        { type: 'Color', maxResults: 10 },
-        { type: 'Description', maxResults: 1 }
+        { type: 'Color', maxResults: 10 }
       ]
     })
   })
@@ -65,7 +62,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   if (!response.ok) {
     const errorText = await response.text()
     console.error('[Vision] API Error:', response.status, errorText)
-    throw new Error(`Azure Vision API failed (${response.status}): ${errorText}`)
+    throw new Error(`Azure Vision API failed with status ${response.status}: ${errorText}`)
   }
 
   const text = await response.text()
@@ -78,8 +75,8 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   let data: any
   try {
     data = JSON.parse(text)
-  } catch (parseError: any) {
-    console.error('[Vision] JSON parse error:', parseError?.message || parseError)
+  } catch (e: any) {
+    console.error('[Vision] JSON parse error:', e.message)
     console.error('[Vision] Response text preview:', text.substring(0, 200))
     throw new Error('Could not parse Azure Vision API response. Invalid JSON.')
   }
@@ -94,110 +91,98 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   console.log('[Vision] Categories count:', data.categories?.length || 0)
   console.log('[Vision] Image type:', data.imageTypeResult?.type || 'Unknown')
 
-  // Determine image type
-  let type = 'Photo'
   const imageType = data.imageTypeResult?.type || ''
-  const imageTypeLower = imageType.toLowerCase()
-
-  if (imageTypeLower.includes('illustration') || imageTypeLower.includes('drawing') || imageTypeLower.includes('sketch') || imageTypeLower.includes('cartoon') || imageTypeLower.includes('comics')) {
-    type = 'Illustration'
-  } else if (imageTypeLower.includes('painting') || imageTypeLower.includes('art') || imageTypeLower.includes('artwork')) {
-    type = 'Digital Art'
-  } else if (imageTypeLower.includes('text') || imageTypeLower.includes('handwriting') || imageTypeLower.includes('clipart')) {
-    type = 'Digital Art'
-  } else if (imageTypeLower.includes('3d') || imageTypeLower.includes('render') || imageTypeLower.includes('cg')) {
-    type = '3D Render'
-  }
-
-  // Determine style
-  let style = 'Professional photography'
   const caption = data.captionResult?.text || ''
   const captionLower = caption.toLowerCase()
   const tags = data.tags || []
-  const tagsText = tags.map(t => t.name).join(', ').toLowerCase()
-  const colors = data.color || {}
-  const dominantColors = colors.dominantColors || []
-
-  if (captionLower.includes('portrait') || captionLower.includes('headshot') || tagsText.includes('portrait')) {
-    style = 'Professional portrait photography'
-  } else if (captionLower.includes('landscape') || captionLower.includes('nature') || tagsText.includes('landscape')) {
-    style = 'Landscape photography'
-  } else if (captionLower.includes('studio') || captionLower.includes('studio photography') || tagsText.includes('studio')) {
-    style = 'Studio photography'
-  } else if (captionLower.includes('cinematic') || captionLower.includes('dramatic')) {
-    style = 'Cinematic photography'
-  } else if (captionLower.includes('vintage') || captionLower.includes('retro')) {
-    style = 'Vintage photography'
-  } else if (type !== 'Photo') {
-    if (type === 'Illustration') {
-      style = 'Digital illustration with clean lines and vibrant colors'
-    } else if (type === 'Digital Art') {
-      style = 'Digital artwork with rich details and artistic styling'
-    } else if (type === 'Anime') {
-      style = 'Anime-style artwork with characteristic features and vibrant colors'
-    } else if (type === '3D Render') {
-      style = '3D rendered image with realistic lighting and high detail'
-    }
-  }
-
-  // Determine lighting
-  let lighting = 'Balanced natural lighting'
-  if (captionLower.includes('bright') || captionLower.includes('sunny') || captionLower.includes('daylight') || captionLower.includes('sunlight')) {
-    lighting = 'Bright and well-lit scene'
-  } else if (captionLower.includes('backlit') || captionLower.includes('silhouette')) {
-    lighting = 'Backlit subject with dramatic effect'
-  } else if (captionLower.includes('dark') || captionLower.includes('shadowy') || captionLower.includes('low light')) {
-    lighting = 'Low light or moody atmosphere'
-  } else if (captionLower.includes('studio lighting') || captionLower.includes('artificial')) {
-    lighting = 'Studio lighting with controlled shadows'
-  } else if (captionLower.includes('golden') || captionLower.includes('sunset') || captionLower.includes('warm light')) {
-    lighting = 'Golden hour warm lighting'
-  }
-
-  // Determine composition
-  let composition = 'Well-composed with balanced elements'
-  if (captionLower.includes('close-up') || captionLower.includes('headshot')) {
-    composition = 'Close-up shot with shallow depth of field'
-  } else if (captionLower.includes('centered') || captionLower.includes('symmetry') || captionLower.includes('center')) {
-    composition = 'Centered subject with balanced framing'
-  }
-
-  // Determine colors
-  let colors = 'Natural and balanced color palette'
+  const tagsText = tags.map((t: any) => t.name).join(', ').toLowerCase()
   const colorInfo = data.color || {}
   const dominantColors = colorInfo.dominantColors || []
 
+  let type = 'Photo'
+  const imageTypeLower = imageType.toLowerCase()
+
+  if (imageTypeLower.includes('illustration') || imageTypeLower.includes('drawing') || imageTypeLower.includes('sketch') || imageTypeLower.includes('cartoon')) {
+    type = 'Illustration'
+  } else if (imageTypeLower.includes('painting') || imageTypeLower.includes('artwork') || imageTypeLower.includes('digital art')) {
+    type = 'Digital Art'
+  } else if (imageTypeLower.includes('anime') || imageTypeLower.includes('manga')) {
+    type = 'Anime'
+  } else if (imageTypeLower.includes('3d') || imageTypeLower.includes('render')) {
+    type = '3D Render'
+  }
+
+  let style = 'Professional photography'
+  if (captionLower.includes('portrait') || tagsText.includes('portrait')) {
+    style = 'Professional portrait photography'
+  } else if (captionLower.includes('landscape') || tagsText.includes('landscape')) {
+    style = 'Landscape photography'
+  } else if (captionLower.includes('studio') || tagsText.includes('studio')) {
+    style = 'Studio photography'
+  } else if (captionLower.includes('cinematic') || captionLower.includes('dramatic')) {
+    style = 'Cinematic photography'
+  } else if (type !== 'Photo') {
+    if (type === 'Illustration') {
+      style = 'Digital illustration with clean lines'
+    } else if (type === 'Digital Art') {
+      style = 'Digital artwork with rich details'
+    } else if (type === 'Anime') {
+      style = 'Anime-style artwork'
+    } else if (type === '3D Render') {
+      style = '3D rendered image'
+    }
+  }
+
+  let lighting = 'Balanced natural lighting'
+  if (captionLower.includes('bright') || captionLower.includes('sunny') || captionLower.includes('sunlight')) {
+    lighting = 'Bright and well-lit scene'
+  } else if (captionLower.includes('backlit')) {
+    lighting = 'Backlit subject with dramatic effect'
+  } else if (captionLower.includes('dark') || captionLower.includes('shadowy')) {
+    lighting = 'Low light or moody atmosphere'
+  } else if (captionLower.includes('studio lighting') || captionLower.includes('artificial')) {
+    lighting = 'Studio lighting with controlled shadows'
+  } else if (captionLower.includes('golden')) {
+    lighting = 'Golden hour warm lighting'
+  }
+
+  let composition = 'Well-composed with balanced elements'
+  if (captionLower.includes('close-up') || tagsText.includes('close-up')) {
+    composition = 'Close-up shot'
+  } else if (captionLower.includes('centered') || captionLower.includes('center')) {
+    composition = 'Centered subject with balanced framing'
+  }
+
+  let colors = 'Natural and balanced color palette'
   if (dominantColors.length > 0) {
-    const colorNames = dominantColors.slice(0, 5).map(c => c.color).join(', ')
+    const colorNames = dominantColors.slice(0, 5).map((c: any) => c.color).join(', ')
     if (colorNames.length > 0) {
       colors = `Color palette featuring: ${colorNames}`
     }
   }
 
-  // Determine mood
   let mood = 'Neutral and balanced'
   const description = data.descriptionResult?.text || caption
 
-  if (description.toLowerCase().includes('happy') || description.toLowerCase().includes('joyful') || description.toLowerCase().includes('cheerful') || description.toLowerCase().includes('smile')) {
+  if (description.toLowerCase().includes('happy') || description.toLowerCase().includes('joyful') || captionLower.includes('smile')) {
     mood = 'Cheerful and positive'
-  } else if (description.toLowerCase().includes('sad') || description.toLowerCase().includes('melancholy') || captionLower.includes('sad') || captionLower.includes('melancholic')) {
+  } else if (description.toLowerCase().includes('sad') || captionLower.includes('melancholic')) {
     mood = 'Moody and melancholic'
-  } else if (description.toLowerCase().includes('dramatic') || description.toLowerCase().includes('intense')) {
+  } else if (description.toLowerCase().includes('dramatic') || captionLower.includes('intense')) {
     mood = 'Dramatic and intense'
-  } else if (description.toLowerCase().includes('peaceful') || description.toLowerCase().includes('calm') || description.toLowerCase().includes('serene')) {
+  } else if (description.toLowerCase().includes('peaceful') || captionLower.includes('calm') || captionLower.includes('serene')) {
     mood = 'Peaceful and serene'
-  } else if (description.toLowerCase().includes('energetic') || description.toLowerCase().includes('dynamic')) {
+  } else if (description.toLowerCase().includes('energetic') || captionLower.includes('dynamic')) {
     mood = 'Energetic and dynamic'
-  } else if (description.toLowerCase().includes('romantic') || description.toLowerCase().includes('intimate')) {
+  } else if (description.toLowerCase().includes('romantic') || captionLower.includes('intimate')) {
     mood = 'Romantic and intimate'
-  } else if (description.toLowerCase().includes('professional') || description.toLowerCase().includes('elegant')) {
+  } else if (description.toLowerCase().includes('professional') || captionLower.includes('elegant')) {
     mood = 'Professional and elegant'
   }
 
-  // Determine realism
   let realism = 'High realism with natural textures'
   if (type === 'Illustration') {
-    realism = 'Medium realism - clean digital illustration'
+    realism = 'Medium realism - digital illustration'
   } else if (type === 'Digital Art') {
     realism = 'Highly detailed digital artwork'
   } else if (type === 'Anime') {
@@ -224,8 +209,9 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   return analysis
 }
 
-// Generate optimized prompt for Gemini
 function generatePromptForGemini(analysis: ImageAnalysis): string {
+  console.log('[Prompt] Generating optimized Gemini prompt...')
+
   const prompt = `Create a ${analysis.type.toLowerCase()} in ${analysis.style.toLowerCase()} style, featuring [USER FACE] as the main subject.
 
 The image should use ${analysis.lighting.toLowerCase()}, with a ${analysis.composition.toLowerCase()} approach.
@@ -239,7 +225,7 @@ Key visual elements to include:
 - Appropriate background context
 - Professional color grading matching the ${analysis.style.toLowerCase()} aesthetic
 
-Important: Use the user's uploaded face photo as the base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`
+Important: Use the user's uploaded face photo as a base, matching the lighting, angle, and mood described above to create a cohesive, realistic portrait. Maintain the ${analysis.mood.toLowerCase()} atmosphere while ensuring that the face looks natural and well-integrated into the scene.`
 
   console.log('[Prompt] Prompt generated, length:', prompt.length)
   return prompt
@@ -248,8 +234,8 @@ Important: Use the user's uploaded face photo as the base, matching the lighting
 const DEFAULT_TIPS = [
   'Upload a clear photo of your face first in Gemini',
   'The prompt uses [USER FACE] placeholder - Gemini will use your uploaded photo',
-  'Paste the entire prompt as-is, don\'t edit it',
-  'If results aren\'t perfect, try regenerating the prompt',
+  'Paste entire prompt as-is, do not edit it',
+  'If results are not perfect, try regenerating the prompt',
   'For best results, use a well-lit, front-facing photo of your face'
 ]
 
@@ -260,7 +246,7 @@ export async function POST(request: NextRequest) {
   console.log(`[${requestId}] ======== REQUEST START ========`)
   console.log(`[${requestId}] Method: ${request.method}`)
   console.log(`[${requestId}] Time: ${new Date().toISOString()}`)
-  console.log(`[${requestId}] Environment: ${process.env.VERCEL ? 'Vercel' : 'Local'}`)
+  console.log(`[${requestId}] Environment: ${process.env.VERCEL ? 'Vercel (Production)' : 'Local'}`)
   console.log(`[${requestId}] Endpoint: ${AZURE_BASE_URL}`)
 
   try {
@@ -273,7 +259,6 @@ export async function POST(request: NextRequest) {
 
     console.log(`[${requestId}] Image data length:`, image?.length || 0)
 
-    // Validate
     const validation = validateImage(image)
     if (!validation.valid) {
       console.log(`[${requestId}] Validation failed:`, validation.error)
@@ -282,14 +267,11 @@ export async function POST(request: NextRequest) {
 
     console.log(`[${requestId}] Validation passed`)
 
-    // Analyze image with Azure Computer Vision API
-    console.log(`[${requestId}] Starting Azure Vision Analysis...`)
     const analysis = await analyzeImageWithAzureVision(image)
     console.log(`[${requestId}] Azure Vision complete:`, analysis.type, analysis.style)
 
-    // Generate prompt
     const prompt = generatePromptForGemini(analysis)
-    console.log(`[${requestId}] Prompt generated, length:`, prompt.length, 'chars')
+    console.log(`[${requestId}] Prompt complete, length:`, prompt.length, 'chars')
 
     const result = {
       success: true,
@@ -311,24 +293,19 @@ export async function POST(request: NextRequest) {
     let errorMessage = 'Something went wrong. Please try again.'
 
     if (error?.message) {
-      if (error.message.includes('empty response')) {
+      const errorMsg = error.message.toString()
+      if (errorMsg.includes('empty response')) {
         errorMessage = 'Azure Vision API returned empty response. Please try again.'
-      } else if (error.message.includes('Could not parse') || error.message.includes('Invalid JSON')) {
+      } else if (errorMsg.includes('Could not parse') || errorMsg.includes('Invalid JSON')) {
         errorMessage = 'Could not analyze image due to invalid API response. Please try with a different image.'
-      } else if (error.message.includes('API failed')) {
-        const statusMatch = error.message.match(/\((\d{3})\)/)
-        if (statusMatch) {
-          const status = statusMatch[1]
-          if (status === '401') {
-            errorMessage = 'Azure Vision API key is invalid. Please check your Azure portal.'
-          } else if (status === '403') {
-            errorMessage = 'Azure Vision API permission denied. Please check key permissions in your Azure portal.'
-          } else if (status === '429') {
-            errorMessage = 'Azure Vision API quota exceeded. Please check your Azure billing or try again tomorrow.'
-          } else if (status === '408') {
-            errorMessage = 'Request timed out. Please try with a smaller image.'
-          }
-        }
+      } else if (errorMsg.includes('API failed') || errorMsg.includes('Unauthorized') || errorMsg.includes('invalid key')) {
+        errorMessage = 'Azure Vision API key is invalid. Please check your Azure portal.'
+      } else if (errorMsg.includes('Forbidden') || errorMsg.includes('permission')) {
+        errorMessage = 'Azure Vision API permission denied. Please check key permissions in your Azure portal.'
+      } else if (errorMsg.includes('429') || errorMsg.includes('quota')) {
+        errorMessage = 'Azure Vision API quota exceeded. Please check your Azure billing or try again tomorrow.'
+      } else if (errorMsg.includes('408') || errorMsg.includes('timeout')) {
+        errorMessage = 'Request timed out. Please try with a smaller image.'
       }
     }
 
