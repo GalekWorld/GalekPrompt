@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 // Azure Computer Vision API credentials
 const AZURE_VISION_KEY = '1pVJmutTKV1Iz2V9yngrzi3UIOtxVbFje54PEwyKIK1iFXQNXwsVJQQJ99CAACi5YpzXJ3w3AAAFACOGomUn';
-const AZURE_ENDPOINT = 'https://galek.cognitiveservices.azure.com/';
+const AZURE_ENDPOINT = 'https://galek.cognitiveservices.azure.com';
 
 interface ImageAnalysis {
   type: string
@@ -65,14 +65,28 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   if (!response.ok) {
     const errorText = await response.text()
     console.error('[Vision] API Error:', response.status, errorText)
-    throw new Error(`Azure Vision API failed: ${errorText}`)
+    throw new Error(`Azure Vision API failed (${response.status}): ${errorText}`)
   }
 
   const text = await response.text()
-  const data = JSON.parse(text)
 
-  if (!data || !data.categories || !data.tags) {
-    throw new Error('Azure Vision API returned invalid response')
+  if (!text || text.trim() === '') {
+    console.error('[Vision] Empty response from Azure API')
+    throw new Error('Azure Vision API returned empty response. Please try again.')
+  }
+
+  let data: any
+  try {
+    data = JSON.parse(text)
+  } catch (parseError: any) {
+    console.error('[Vision] JSON parse error:', parseError?.message || parseError)
+    console.error('[Vision] Response text preview:', text.substring(0, 200))
+    throw new Error('Could not parse Azure Vision API response. Invalid JSON.')
+  }
+
+  if (!data || !data.captionResult || !data.tags) {
+    console.error('[Vision] Invalid response structure:', data)
+    throw new Error('Azure Vision API returned invalid response structure')
   }
 
   console.log('[Vision] Caption:', data.captionResult?.text || 'No caption')
@@ -87,7 +101,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
 
   if (imageTypeLower.includes('illustration') || imageTypeLower.includes('drawing') || imageTypeLower.includes('sketch') || imageTypeLower.includes('cartoon') || imageTypeLower.includes('comics')) {
     type = 'Illustration'
-  } else if (imageTypeLower.includes('painting') || imageTypeLower.includes('art') || imageTypeLower.includes('artwork') || imageTypeLower.includes('digital art')) {
+  } else if (imageTypeLower.includes('painting') || imageTypeLower.includes('art') || imageTypeLower.includes('artwork')) {
     type = 'Digital Art'
   } else if (imageTypeLower.includes('text') || imageTypeLower.includes('handwriting') || imageTypeLower.includes('clipart')) {
     type = 'Digital Art'
@@ -108,7 +122,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
     style = 'Professional portrait photography'
   } else if (captionLower.includes('landscape') || captionLower.includes('nature') || tagsText.includes('landscape')) {
     style = 'Landscape photography'
-  } else if (captionLower.includes('studio') || captionLower.includes('studio photography')) {
+  } else if (captionLower.includes('studio') || captionLower.includes('studio photography') || tagsText.includes('studio')) {
     style = 'Studio photography'
   } else if (captionLower.includes('cinematic') || captionLower.includes('dramatic')) {
     style = 'Cinematic photography'
@@ -132,7 +146,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
     lighting = 'Bright and well-lit scene'
   } else if (captionLower.includes('backlit') || captionLower.includes('silhouette')) {
     lighting = 'Backlit subject with dramatic effect'
-  } else if (captionLower.includes('dark') || captionLower.includes('shadowy') || captionLower.includes('low light') || captionLower.includes('night')) {
+  } else if (captionLower.includes('dark') || captionLower.includes('shadowy') || captionLower.includes('low light')) {
     lighting = 'Low light or moody atmosphere'
   } else if (captionLower.includes('studio lighting') || captionLower.includes('artificial')) {
     lighting = 'Studio lighting with controlled shadows'
@@ -149,11 +163,14 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   }
 
   // Determine colors
-  let colorsDesc = 'Natural and balanced color palette'
+  let colors = 'Natural and balanced color palette'
+  const colorInfo = data.color || {}
+  const dominantColors = colorInfo.dominantColors || []
+
   if (dominantColors.length > 0) {
     const colorNames = dominantColors.slice(0, 5).map(c => c.color).join(', ')
     if (colorNames.length > 0) {
-      colorsDesc = `Color palette featuring: ${colorNames}`
+      colors = `Color palette featuring: ${colorNames}`
     }
   }
 
@@ -161,17 +178,17 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
   let mood = 'Neutral and balanced'
   const description = data.descriptionResult?.text || caption
 
-  if (description.toLowerCase().includes('happy') || description.toLowerCase().includes('joyful') || description.toLowerCase().includes('cheerful') || captionLower.includes('smile')) {
+  if (description.toLowerCase().includes('happy') || description.toLowerCase().includes('joyful') || description.toLowerCase().includes('cheerful') || description.toLowerCase().includes('smile')) {
     mood = 'Cheerful and positive'
   } else if (description.toLowerCase().includes('sad') || description.toLowerCase().includes('melancholy') || captionLower.includes('sad') || captionLower.includes('melancholic')) {
     mood = 'Moody and melancholic'
   } else if (description.toLowerCase().includes('dramatic') || description.toLowerCase().includes('intense')) {
     mood = 'Dramatic and intense'
-  } else if (description.toLowerCase().includes('peaceful') || description.toLowerCase().includes('calm') || captionLower.includes('peaceful')) {
+  } else if (description.toLowerCase().includes('peaceful') || description.toLowerCase().includes('calm') || description.toLowerCase().includes('serene')) {
     mood = 'Peaceful and serene'
   } else if (description.toLowerCase().includes('energetic') || description.toLowerCase().includes('dynamic')) {
     mood = 'Energetic and dynamic'
-  } else if (description.toLowerCase().includes('romantic') || description.toLowerCase().includes('intimate') || captionLower.includes('romantic')) {
+  } else if (description.toLowerCase().includes('romantic') || description.toLowerCase().includes('intimate')) {
     mood = 'Romantic and intimate'
   } else if (description.toLowerCase().includes('professional') || description.toLowerCase().includes('elegant')) {
     mood = 'Professional and elegant'
@@ -194,7 +211,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
     style,
     lighting,
     composition,
-    colors: colorsDesc,
+    colors,
     mood,
     realism
   }
@@ -209,8 +226,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<ImageAn
 
 // Generate optimized prompt for Gemini
 function generatePromptForGemini(analysis: ImageAnalysis): string {
-  console.log('[Prompt] Generating optimized Gemini prompt...')
-
   const prompt = `Create a ${analysis.type.toLowerCase()} in ${analysis.style.toLowerCase()} style, featuring [USER FACE] as the main subject.
 
 The image should use ${analysis.lighting.toLowerCase()}, with a ${analysis.composition.toLowerCase()} approach.
@@ -291,20 +306,29 @@ export async function POST(request: NextRequest) {
     const duration = Date.now() - startTime
     console.error(`[${requestId}] ======== ERROR (${duration}ms) ========`)
     console.error(`[${requestId}] Error:`, error?.message || error)
+    console.error(`[${requestId}] Error name:`, error?.name || 'Unknown')
 
     let errorMessage = 'Something went wrong. Please try again.'
 
     if (error?.message) {
-      if (error.message.includes('401') || error.message.includes('Unauthorized') || error.message.includes('invalid key')) {
-        errorMessage = 'Azure Vision API key is invalid. Please check your Azure portal.'
-      } else if (error.message.includes('403') || error.message.includes('Forbidden') || error.message.includes('permission')) {
-        errorMessage = 'Azure Vision API permission denied. Please check key permissions in your Azure portal.'
-      } else if (error.message.includes('429') || error.message.includes('quota')) {
-        errorMessage = 'Azure Vision API quota exceeded. Please check your Azure billing or try again tomorrow.'
-      } else if (error.message.includes('408') || error.message.includes('timeout')) {
-        errorMessage = 'Request timed out. Please try with a smaller image.'
-      } else if (error.message.includes('failed') || error.message.includes('API failed') || error.message.includes('invalid response')) {
-        errorMessage = 'Could not analyze image. Please try with a different image.'
+      if (error.message.includes('empty response')) {
+        errorMessage = 'Azure Vision API returned empty response. Please try again.'
+      } else if (error.message.includes('Could not parse') || error.message.includes('Invalid JSON')) {
+        errorMessage = 'Could not analyze image due to invalid API response. Please try with a different image.'
+      } else if (error.message.includes('API failed')) {
+        const statusMatch = error.message.match(/\((\d{3})\)/)
+        if (statusMatch) {
+          const status = statusMatch[1]
+          if (status === '401') {
+            errorMessage = 'Azure Vision API key is invalid. Please check your Azure portal.'
+          } else if (status === '403') {
+            errorMessage = 'Azure Vision API permission denied. Please check key permissions in your Azure portal.'
+          } else if (status === '429') {
+            errorMessage = 'Azure Vision API quota exceeded. Please check your Azure billing or try again tomorrow.'
+          } else if (status === '408') {
+            errorMessage = 'Request timed out. Please try with a smaller image.'
+          }
+        }
       }
     }
 
