@@ -1,43 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 
-// Global cache for ZAI instance
-let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null
-let isInitializing = false
-let initPromise: Promise<any> | null = null
-
-// Initialize ZAI instance with proper error handling
-async function getZAIInstance() {
-  // Return cached instance if available
-  if (zaiInstance) {
-    return zaiInstance
+// Simple function to get ZAI instance without caching (more reliable in Vercel)
+async function createZAIInstance() {
+  try {
+    console.log('[ZAI] Initializing SDK...')
+    const zai = await ZAI.create()
+    console.log('[ZAI] SDK initialized successfully')
+    return zai
+  } catch (error) {
+    console.error('[ZAI] Initialization failed:', error)
+    throw new Error('AI service unavailable. Please try again later.')
   }
-
-  // Return existing initialization promise if in progress
-  if (isInitializing && initPromise) {
-    await initPromise
-    return zaiInstance
-  }
-
-  // Start new initialization
-  isInitializing = true
-  initPromise = (async () => {
-    try {
-      console.log('Initializing ZAI SDK...')
-      const zai = await ZAI.create()
-      console.log('ZAI SDK initialized successfully')
-      zaiInstance = zai
-      isInitializing = false
-      return zai
-    } catch (error) {
-      console.error('Failed to initialize ZAI SDK:', error)
-      isInitializing = false
-      zaiInstance = null
-      throw new Error('Failed to initialize AI service. Please check configuration and try again.')
-    }
-  })()
-
-  return initPromise
 }
 
 interface ImageAnalysis {
@@ -56,12 +30,10 @@ function validateImage(imageData: string): { valid: boolean; error?: string } {
     return { valid: false, error: 'Invalid image data' }
   }
 
-  // Check if it's a base64 data URI
   if (!imageData.startsWith('data:image/')) {
     return { valid: false, error: 'Invalid image format' }
   }
 
-  // Check supported formats
   const supportedFormats = ['data:image/jpeg', 'data:image/png', 'data:image/webp']
   const isValidFormat = supportedFormats.some(format => imageData.startsWith(format))
 
@@ -74,38 +46,30 @@ function validateImage(imageData: string): { valid: boolean; error?: string } {
 
 // Analyze image with VLM
 async function analyzeImageWithVLM(imageUrl: string): Promise<ImageAnalysis> {
-  try {
-    const zai = await getZAIInstance()
+  const zai = await createZAIInstance()
 
-    const prompt = `Analyze this image in detail and provide a comprehensive breakdown in JSON format with these fields:
+  const prompt = `Analyze this image and provide a JSON breakdown:
 {
-  "type": "image type (photo/illustration/render/anime/digital art/other)",
+  "type": "photo/illustration/render/anime",
   "style": "specific artistic or photographic style",
-  "lighting": "detailed lighting description including direction and quality",
-  "composition": "framing, angle, and composition details",
-  "colors": "color palette, dominant colors, and color harmony",
-  "mood": "atmosphere, emotion, and overall feeling",
-  "realism": "level of realism (low/medium/high)"
+  "lighting": "lighting description",
+  "composition": "framing and composition",
+  "colors": "color palette and dominant colors",
+  "mood": "atmosphere and feeling",
+  "realism": "low/medium/high"
 }
 
-Focus on elements that can be replicated in AI image generation. Be specific and descriptive.`
+Focus on visual elements for AI image generation.`
 
-    console.log('Calling VLM API...')
+  try {
+    console.log('[VLM] Sending request...')
     const response = await zai.chat.completions.createVision({
       messages: [
         {
           role: 'user',
           content: [
-            {
-              type: 'text',
-              text: prompt
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageUrl
-              }
-            }
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageUrl } }
           ]
         }
       ],
@@ -113,209 +77,116 @@ Focus on elements that can be replicated in AI image generation. Be specific and
     })
 
     const content = response.choices[0]?.message?.content
-
     if (!content) {
-      throw new Error('No content received from VLM')
+      throw new Error('No content from VLM')
     }
 
-    console.log('VLM raw response length:', content.length)
+    console.log('[VLM] Response received, length:', content.length)
 
-    // Try to parse JSON from response
-    try {
-      // Extract JSON if it's wrapped in markdown code blocks
-      let jsonStr = content.trim()
-      if (jsonStr.startsWith('```json')) {
-        jsonStr = jsonStr.slice(7)
-      }
-      if (jsonStr.startsWith('```')) {
-        jsonStr = jsonStr.slice(3)
-      }
-      if (jsonStr.endsWith('```')) {
-        jsonStr = jsonStr.slice(0, -3)
-      }
-      jsonStr = jsonStr.trim()
-
-      const parsed = JSON.parse(jsonStr)
-      return parsed as ImageAnalysis
-    } catch (parseError) {
-      console.error('Failed to parse VLM JSON response:', parseError)
-      console.error('VLM Response sample:', content.substring(0, 300) + '...')
-      throw new Error('Failed to parse image analysis from AI response')
+    // Parse JSON
+    let jsonStr = content.trim()
+    if (jsonStr.includes('```')) {
+      jsonStr = jsonStr.replace(/```json?/g, '').replace(/```/g, '').trim()
     }
+
+    return JSON.parse(jsonStr) as ImageAnalysis
   } catch (error) {
-    console.error('VLM Analysis Error:', error)
-    if (error instanceof Error) {
-      console.error('Error message:', error.message)
-      console.error('Error stack:', error.stack)
-    }
-    throw error
+    console.error('[VLM] Error:', error)
+    throw new Error('Failed to analyze image')
   }
 }
 
 // Generate optimized prompt with LLM
 async function generatePromptWithLLM(analysis: ImageAnalysis): Promise<string> {
+  const zai = await createZAIInstance()
+
+  const systemPrompt = `You are a prompt engineer for Gemini Image Generation. Create optimized prompts in natural English (150-250 words). Include [USER FACE] placeholder. Focus on STYLE, not specific people.`
+
+  const userPrompt = `Based on this analysis, create a Gemini prompt:
+Type: ${analysis.type}
+Style: ${analysis.style}
+Lighting: ${analysis.lighting}
+Composition: ${analysis.composition}
+Colors: ${analysis.colors}
+Mood: ${analysis.mood}
+Realism: ${analysis.realism}
+
+Create a natural, descriptive prompt for recreating this visual style with the user's face.`
+
   try {
-    const zai = await getZAIInstance()
-
-    const systemPrompt = `You are an expert prompt engineer specializing in Gemini Image Generation. Your task is to create highly optimized, natural-language prompts that allow users to recreate specific visual styles using their own face.
-
-Key principles:
-1. Write in natural, descriptive English (not keyword lists)
-2. Focus on STYLE and ATMOSPHERE, not specific people
-3. Be concise but detailed (150-250 words)
-4. Use vivid, sensory language
-5. Include all visual elements: lighting, composition, colors, mood
-6. Optimize specifically for Gemini's image generation capabilities
-7. The prompt should feel professional and sophisticated
-8. Always include [USER FACE] placeholder for where the face should appear
-9. Start with a clear instruction about using the user's uploaded photo
-
-Output format: ONLY the prompt text, no commentary, no "Here's your prompt", just the prompt itself.`
-
-    const userPrompt = `Create an optimized Gemini Image prompt based on this image analysis:
-
-Image Analysis:
-- Type: ${analysis.type}
-- Style: ${analysis.style}
-- Lighting: ${analysis.lighting}
-- Composition: ${analysis.composition}
-- Colors: ${analysis.colors}
-- Mood: ${analysis.mood}
-- Realism: ${analysis.realism}
-
-Generate a natural, descriptive prompt that captures all these visual elements. The prompt should enable someone to recreate this exact visual style with their own face. Use [USER FACE] as the placeholder for where the face should appear.
-
-Remember: This prompt will be used in Gemini Image generation where the user will upload their own face photo, so the prompt needs to instruct the AI to use that face while matching all the other visual characteristics.`
-
-    console.log('Calling LLM API...')
+    console.log('[LLM] Generating prompt...')
     const response = await zai.chat.completions.create({
       messages: [
-        {
-          role: 'assistant',
-          content: systemPrompt
-        },
-        {
-          role: 'user',
-          content: userPrompt
-        }
+        { role: 'assistant', content: systemPrompt },
+        { role: 'user', content: userPrompt }
       ],
       thinking: { type: 'disabled' }
     })
 
     const prompt = response.choices[0]?.message?.content
-
     if (!prompt) {
-      throw new Error('No content received from LLM')
+      throw new Error('No content from LLM')
     }
 
+    console.log('[LLM] Prompt generated, length:', prompt.length)
     return prompt.trim()
   } catch (error) {
-    console.error('LLM Generation Error:', error)
-    if (error instanceof Error) {
-      console.error('Error message:', error.message)
-      console.error('Error stack:', error.stack)
-    }
-    throw error
+    console.error('[LLM] Error:', error)
+    throw new Error('Failed to generate prompt')
   }
 }
 
-// Default tips for users
 const DEFAULT_TIPS = [
   'Upload a clear photo of your face first in Gemini',
-  'The prompt uses [USER FACE] placeholder — Gemini will use your uploaded photo',
-  'Paste the entire prompt as-is, don\'t edit it',
-  'If results aren\'t perfect, try regenerating the prompt',
-  'For best results, use a well-lit, front-facing photo of your face'
+  'The prompt uses [USER FACE] placeholder',
+  'Paste the entire prompt as-is',
+  'Try regenerating if results are not perfect',
+  'Use a well-lit front-facing photo of your face'
 ]
 
 export async function POST(request: NextRequest) {
-  const requestId = Math.random().toString(36).substring(7)
-  console.log(`[${requestId}] ========== Starting /api/analyze request ==========`)
-  console.log(`[${requestId}] Method: ${request.method}`)
+  console.log('[API] ======== Request Started ========')
 
   try {
-    // Check request method
     if (request.method !== 'POST') {
-      return NextResponse.json(
-        { success: false, error: 'Method not allowed. Use POST.' },
-        { status: 405 }
-      )
+      return NextResponse.json({ success: false, error: 'Use POST method' }, { status: 405 })
     }
 
-    // Parse request body
     const body = await request.json()
     const { image } = body
 
-    console.log(`[${requestId}] Received image data, length:`, image?.length || 0)
+    console.log('[API] Image data length:', image?.length || 0)
 
-    // Validate image
+    // Validate
     const validation = validateImage(image)
     if (!validation.valid) {
-      console.log(`[${requestId}] Validation failed:`, validation.error)
-      return NextResponse.json(
-        { success: false, error: validation.error },
-        { status: 400 }
-      )
+      console.log('[API] Validation failed:', validation.error)
+      return NextResponse.json({ success: false, error: validation.error }, { status: 400 })
     }
 
-    // Step 1: Analyze image with VLM
-    console.log(`[${requestId}] Starting VLM analysis...`)
+    // Analyze
+    console.log('[API] Starting analysis...')
     const analysis = await analyzeImageWithVLM(image)
-    console.log(`[${requestId}] VLM analysis complete:`, {
-      type: analysis.type,
-      style: analysis.style
-    })
+    console.log('[API] Analysis complete:', analysis.type, analysis.style)
 
-    // Step 2: Generate prompt with LLM
-    console.log(`[${requestId}] Starting LLM prompt generation...`)
+    // Generate prompt
     const prompt = await generatePromptWithLLM(analysis)
-    console.log(`[${requestId}] LLM prompt generation complete, length:`, prompt.length)
+    console.log('[API] Prompt generated, length:', prompt.length)
 
-    // Step 3: Return results
-    const result = {
-      success: true,
-      analysis,
-      prompt,
-      tips: DEFAULT_TIPS
-    }
+    const result = { success: true, analysis, prompt, tips: DEFAULT_TIPS }
 
-    console.log(`[${requestId}] ========== Request completed successfully ==========`)
+    console.log('[API] ======== Request Complete ========')
     return NextResponse.json(result)
+
   } catch (error) {
-    console.error(`[${requestId}] ========== Error in /api/analyze ==========`)
-    console.error(`[${requestId}] Error:`, error)
+    console.error('[API] ======== Error ========')
+    console.error('[API] Error:', error)
 
-    // Determine appropriate error message
-    let errorMessage = 'Oops! Something went wrong. Please try again.'
-
-    if (error instanceof Error) {
-      console.error(`[${requestId}] Error message:`, error.message)
-      console.error(`[${requestId}] Error stack:`, error.stack)
-
-      if (error.message.includes('Failed to analyze')) {
-        errorMessage = 'Failed to analyze image. Please try with a different image.'
-      } else if (error.message.includes('Failed to generate')) {
-        errorMessage = 'Failed to generate prompt. Please try again.'
-      } else if (error.message.includes('Failed to initialize')) {
-        errorMessage = 'AI service initialization failed. Please try again in a moment.'
-      } else if (error.message.includes('rate limit')) {
-        errorMessage = 'Too many requests. Please wait a moment and try again.'
-      } else if (error.message.includes('timeout')) {
-        errorMessage = 'Request timed out. Please try with a smaller image.'
-      } else if (error.message.includes('Network')) {
-        errorMessage = 'Network error. Please check your connection and try again.'
-      }
-    }
-
-    console.error(`[${requestId}] Returning error to client:`, errorMessage)
-    return NextResponse.json(
-      { success: false, error: errorMessage },
-      { status: 500 }
-    )
+    const errorMessage = error instanceof Error ? error.message : 'Something went wrong'
+    return NextResponse.json({ success: false, error: errorMessage }, { status: 500 })
   }
 }
 
-// Handle OPTIONS for CORS if needed
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 200,
