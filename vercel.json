@@ -1,0 +1,15 @@
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  // Increase timeout for API routes (helpful for AI API calls)
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '10mb',
+    },
+  },
+  // Configure Vercel-specific settings
+  env: {
+    VERCEL_TIMEOUT: '60',
+  },
+}
+
+export default nextConfig
