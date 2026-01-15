@@ -4,9 +4,12 @@ import { NextRequest, NextResponse } from 'next/server';
 const AZURE_VISION_KEY = process.env.AZURE_VISION_KEY!;
 const AZURE_ANALYZE_URL = `${process.env.AZURE_ENDPOINT}/vision/v3.2/analyze?visualFeatures=Description,Tags,Categories,Color,Objects,Faces,Adult,ImageType`;
 
+// Siempre al final del prompt (EXACTO)
+const FACE_LOCK_SUFFIX =
+  'YOU MUST USE THE EXACT SAME FACE, FACIAL STRUCTURE, AND PHYSICAL APPEARANCE 100% IDENTICAL TO THE SUBJECT IN THE INPUT REFERENCE IMAGE. DO NOT ADD FACIAL HAIR OR FEATURES NOT PRESENT IN THE USER\'S ACTUAL FACE.';
+
 // Interfaces
 interface ImageAnalysis {
-  // High-level summary fields
   type: string;
   style: string;
   lighting: string;
@@ -20,18 +23,9 @@ interface ImageAnalysis {
   objectsDescription: string;
   environmentDescription: string;
 
-  // Extra helpful metadata (optional but improves prompt reliability)
   imageWidth?: number;
   imageHeight?: number;
 }
-
-const DEFAULT_TIPS = [
-  'In Gemini, upload TWO images: (1) the reference scene image (Pinterest), and (2) a clear face photo of you',
-  'Paste the entire prompt as-is, do not edit it',
-  'Your face photo is used ONLY as identity reference (not as a background/style reference)',
-  'For best results, use a well-lit, front-facing face photo with neutral expression',
-  'If results are not perfect, try regenerating the prompt'
-];
 
 // Validación de base64
 function validateImageBase64(imageData: string) {
@@ -55,13 +49,12 @@ function base64ToArrayBuffer(base64: string) {
 }
 
 /* ------------------------------------------------------------------ */
-/* ---------------------- PROMPT HELPERS (NEW) ----------------------- */
+/* ---------------------- PROMPT HELPERS ----------------------------- */
 /* ------------------------------------------------------------------ */
 
 type Rect = { left: number; top: number; width: number; height: number };
 
 function getRect(o: any): Rect | null {
-  // Azure sometimes returns {rectangle:{x,y,w,h}} for objects, and {faceRectangle:{left,top,width,height}} for faces.
   const r = o?.rectangle || o?.faceRectangle || o?.faceRectangle?.rectangle || null;
   if (!r) return null;
 
@@ -78,212 +71,197 @@ function rectCenter(r: Rect) {
   return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
 }
 
-function describeRectPosition(r: Rect, imgW?: number, imgH?: number) {
-  // Prefer normalized coordinates if we know image size; otherwise fallback to heuristics.
-  const { cx, cy } = rectCenter(r);
-
-  let nx = cx;
-  let ny = cy;
-
-  if (imgW && imgH && imgW > 0 && imgH > 0) {
-    nx = cx / imgW;
-    ny = cy / imgH;
-  } else {
-    // Fallback heuristic
-    nx = Math.max(0, Math.min(1, cx / 1000));
-    ny = Math.max(0, Math.min(1, cy / 1000));
-  }
-
-  const horiz = nx < 0.33 ? 'left side of the frame' : nx < 0.66 ? 'center of the frame' : 'right side of the frame';
-  const vert = ny < 0.33 ? 'upper part of the frame' : ny < 0.66 ? 'middle of the frame' : 'lower part of the frame';
-
-  return `${horiz}, ${vert}`;
+function clamp01(n: number) {
+  return Math.max(0, Math.min(1, n));
 }
 
-function extractMainFaceRectFromAzureData(data: any): Rect | null {
-  const faces = Array.isArray(data?.faces) ? data.faces : [];
-  if (!faces.length) return null;
+function arFromDims(w?: number, h?: number): string {
+  if (!w || !h || w <= 0 || h <= 0) return '1:1';
 
-  let best: { area: number; rect: Rect } | null = null;
-  for (const f of faces) {
-    const rect = getRect({ faceRectangle: f.faceRectangle });
-    if (!rect) continue;
-    const area = rect.width * rect.height;
-    if (!best || area > best.area) best = { area, rect };
-  }
-  return best?.rect ?? null;
-}
+  const r = w / h;
 
-function buildNegativePrompt(extra?: string[]) {
-  const base = [
-    // Identity / face quality
-    'no double face',
-    'no duplicated head',
-    'no face distortion',
-    'no asymmetrical eyes',
-    'no cross-eyed',
-    'no deformed jaw',
-    'no warped facial features',
-    'no uncanny skin',
-    'no plastic skin',
-    'no waxy skin',
-
-    // Hands / anatomy
-    'no extra fingers',
-    'no missing fingers',
-    'no fused fingers',
-    'no deformed hands',
-    'no broken wrists',
-    'no malformed anatomy',
-
-    // Text / logos
-    'no gibberish text',
-    'no random letters',
-    'no invented logos',
-    'no fake brand marks',
-
-    // Quality / artifacts
-    'no low resolution',
-    'no heavy noise',
-    'no jpeg artifacts',
-    'no oversharpening halos',
-
-    // Unwanted changes (relaxed to allow natural integration)
-    'do not change the environment',
-    'do not change the overall outfit style or colors (minor fit adjustments allowed if needed for realism)',
-    'do not change the overall pose and body posture (minor natural adjustments allowed for realism)',
-    'do not change the lighting direction',
-
-    // Style (for realism)
-    'no cartoon',
-    'no anime',
-    'no illustration',
-    'no painting'
+  const candidates: Array<{ label: string; value: number }> = [
+    { label: '9:16', value: 9 / 16 },
+    { label: '3:4', value: 3 / 4 },
+    { label: '4:5', value: 4 / 5 },
+    { label: '1:1', value: 1 },
+    { label: '5:4', value: 5 / 4 },
+    { label: '4:3', value: 4 / 3 },
+    { label: '16:9', value: 16 / 9 }
   ];
 
-  const merged = extra?.length ? base.concat(extra) : base;
-  return merged.join(', ');
+  let best = candidates[0];
+  let bestDiff = Infinity;
+
+  for (const c of candidates) {
+    const diff = Math.abs(r - c.value);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = c;
+    }
+  }
+
+  if (bestDiff > 0.08) {
+    const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+    const gw = Math.round(w);
+    const gh = Math.round(h);
+    const g = gcd(gw, gh);
+    const rw = Math.max(1, Math.round(gw / g));
+    const rh = Math.max(1, Math.round(gh / g));
+    return `${rw}:${rh}`;
+  }
+
+  return best.label;
 }
 
-function buildClothingPolicy() {
-  return `
-Clothing & brands policy:
-- Describe clothing, materials, fit, and colors only if they are clearly visible in the image.
-- If a logo/brand is NOT clearly readable: write "logo not legible" and DO NOT guess brands or models.
-- If you must suggest a vibe: use "style similar to ..." without placing any readable logos.
-`.trim();
+function bucketPosition(r: Rect, imgW?: number, imgH?: number) {
+  const { cx, cy } = rectCenter(r);
+  const nx = imgW && imgH ? clamp01(cx / imgW) : clamp01(cx / 1000);
+  const ny = imgW && imgH ? clamp01(cy / imgH) : clamp01(cy / 1000);
+
+  const horiz = nx < 0.33 ? 'left' : nx < 0.66 ? 'center' : 'right';
+  const vert = ny < 0.33 ? 'upper' : ny < 0.66 ? 'middle' : 'lower';
+  return { horiz, vert };
 }
 
-// Generar prompt ultra detallado + negativos (UPDATED)
-function generatePromptForGemini(analysis: ImageAnalysis, azureRaw?: any): string {
-  const mainFaceRect = azureRaw ? extractMainFaceRectFromAzureData(azureRaw) : null;
-  const facePos = mainFaceRect
-    ? describeRectPosition(mainFaceRect, analysis.imageWidth, analysis.imageHeight)
-    : 'unknown position in the frame';
+function cleanSentence(s: string) {
+  return (s || '').trim().replace(/\s+/g, ' ').replace(/^\.*|\.*$/g, '');
+}
 
-  const objectsLower = (analysis.objectsDescription || '').toLowerCase();
-  const hasVehicle =
-    objectsLower.includes('car') ||
-    objectsLower.includes('vehicle') ||
-    objectsLower.includes('automobile') ||
-    objectsLower.includes('truck') ||
-    objectsLower.includes('motorcycle') ||
-    objectsLower.includes('bike');
+function safeJoinSentences(parts: string[]) {
+  return parts
+    .map((p) => cleanSentence(p))
+    .filter(Boolean)
+    .map((p) => (/[.!?]$/.test(p) ? p : `${p}.`))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  const detailDirectives = `
-Detail level requirements (strict):
-- Be extremely specific about: pose, head angle, gaze direction, expression, hand placement, body orientation, and subject placement in frame.
-- Be extremely specific about environment: 8–15 background elements with relative positions (left/right/behind/foreground).
-- Be extremely specific about camera: shot type, lens focal length, depth of field, angle, lighting direction, shadows, reflections, color grading.
-- Only state as facts what is visible or strongly supported by the analysis; otherwise mark as "not identifiable" / "not legible".
-`.trim();
+/* ------------------------------------------------------------------ */
+/* ------------------- PROMPT GENERATION (SIMPLIFIED) ---------------- */
+/* ------------------------------------------------------------------ */
 
-  const vehicleDirective = hasVehicle
-    ? `
-Vehicles (if present):
-- Describe vehicle type, approximate size, color, cleanliness, and orientation (front/3-4/side) using what is visible.
-- Brand/model ONLY if you can read it; otherwise: "brand not identifiable".
-`.trim()
-    : `
-Vehicles:
-- If there is no vehicle visible, do not invent one.
-`.trim();
+/**
+ * Objetivo: un único prompt final, “Shot on iPhone...”,
+ * centrado en describir la foto fielmente con artefactos realistas.
+ * NO devuelve tips, NO devuelve analysis al cliente, solo prompt.
+ *
+ * Importante:
+ * - No inventar marcas/logos no confirmables. (Se evita añadir marcas.)
+ * - El mensaje FACE_LOCK_SUFFIX debe ir SIEMPRE AL FINAL del prompt.
+ * - --ar se coloca ANTES del mensaje final para que el mensaje sea lo último.
+ */
+function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
+  const w = analysis.imageWidth;
+  const h = analysis.imageHeight;
+  const ar = arFromDims(w, h);
 
-  const negative = buildNegativePrompt([
-    // Explicit anti-hard-swap constraints
-    'no hard face swap look',
-    'no pasted-on face',
-    'no mismatched skin tone between face and neck',
-    'no wrong lighting on the face',
-    'no identity drift (keep the user identity consistent)',
-    'do not alter other people in the scene'
+  const caption = cleanSentence(azureRaw?.description?.captions?.[0]?.text || '');
+  const tags: string[] = Array.isArray(azureRaw?.tags) ? azureRaw.tags.map((t: any) => String(t?.name || '')).filter(Boolean) : [];
+  const tagsLower = tags.join(', ').toLowerCase();
+
+  // Vertical/horizontal hint (como tus ejemplos)
+  const orientationHint =
+    ar === '9:16' ? 'A candid, vertical smartphone photo.' : ar === '16:9' ? 'A candid, horizontal smartphone photo.' : 'A candid smartphone photo.';
+
+  // “Shot on iPhone...” constante (tus ejemplos) — sin inventar más metadata.
+  const cameraLine = 'Shot on iPhone 15 Pro.';
+
+  // Heurísticas simples (sin inventar escena; solo “look & feel”)
+  const isLowLight =
+    analysis.lighting.toLowerCase().includes('low') ||
+    analysis.lighting.toLowerCase().includes('dark') ||
+    caption.toLowerCase().includes('night') ||
+    tagsLower.includes('night');
+
+  const lightingArtifacts = isLowLight
+    ? safeJoinSentences([
+        'Visible high-ISO grain and noisy shadows typical of a smartphone in low light',
+        'Deep contrast with crushed blacks in the darkest areas',
+        'Slight motion blur on small fast-moving details consistent with handheld capture'
+      ])
+    : safeJoinSentences([
+        'Natural smartphone sharpening and micro-contrast on fine textures',
+        'Specular highlights can clip slightly in the brightest areas',
+        'Subtle lens flare or glare may appear if strong light hits the lens'
+      ]);
+
+  // Subject (sin rasgos inventados)
+  const faces = Array.isArray(azureRaw?.faces) ? azureRaw.faces : [];
+  let subjectSentence = 'The main subject is a person.';
+  if (faces.length > 0) {
+    // Elegir cara “principal” por tamaño
+    let best = faces[0];
+    let bestArea = -1;
+    for (const f of faces) {
+      const fr = f?.faceRectangle;
+      const area = fr ? Number(fr.width) * Number(fr.height) : 0;
+      if (area > bestArea) {
+        bestArea = area;
+        best = f;
+      }
+    }
+    const age = best?.age != null ? `approx. age ${best.age}` : null;
+    const gender = best?.gender ? String(best.gender) : null;
+    const meta = [age, gender].filter(Boolean).join(', ');
+    subjectSentence = meta ? `The main subject is a person (${meta}).` : 'The main subject is a person.';
+  }
+
+  // Objects (máximo 10, con posición; sin marcas)
+  const rawObjects = Array.isArray(azureRaw?.objects) ? azureRaw.objects : [];
+  const objectsTop = rawObjects.slice(0, 10).map((o: any) => {
+    const rect = getRect(o);
+    const pos = rect ? bucketPosition(rect, w, h) : null;
+    const name = o?.object ? String(o.object) : 'object';
+    const where = pos ? `${pos.horiz} ${pos.vert}` : 'unknown position';
+    return `${name} in the ${where} of the frame`;
+  });
+
+  const objectsSentence =
+    objectsTop.length > 0
+      ? `Key elements visible: ${objectsTop.join(', ')}.`
+      : 'Key elements are not clearly identifiable beyond the main subject.';
+
+  // Scene context (caption + environmentDescription; limpiando duplicaciones)
+  const env = cleanSentence(analysis.environmentDescription);
+  const sceneSentence = safeJoinSentences([
+    caption ? `Scene: ${caption}` : '',
+    env ? `Additional scene context: ${env}` : ''
   ]);
 
-  return `
-You will be given:
-(1) A reference scene image (Pinterest / target scene).
-(2) A separate face photo of the user (identity reference only).
+  // Style block (sin adornos raros)
+  const styleSentence = safeJoinSentences([
+    orientationHint,
+    cleanSentence(analysis.style),
+    `Lighting: ${cleanSentence(analysis.lighting)}`,
+    `Composition: ${cleanSentence(analysis.composition)}`,
+    `Color palette: ${cleanSentence(analysis.colors)}`,
+    `Mood: ${cleanSentence(analysis.mood)}`,
+    `Realism: ${cleanSentence(analysis.realism)}`
+  ]);
 
-TASK:
-Create a new image that matches the reference scene as closely as possible.
-Use the user's face photo ONLY to guide the identity of the main subject in the scene.
-The final result must look like a real photo taken in the reference scene, not like a pasted face.
+  // No inventar logos
+  const noLogoLine = 'If any logos or text are present, keep them not legible and do not invent any new logos or brand marks.';
 
-MAIN SUBJECT SELECTION:
-- The "main subject" is the person whose face is located at: ${facePos}.
-- If multiple people are present, apply the user's identity ONLY to the main subject. Do not change other people.
+  // Construcción final (mensaje SIEMPRE al final)
+  const body = [
+    cameraLine,
+    styleSentence,
+    subjectSentence,
+    sceneSentence,
+    objectsSentence,
+    `Smartphone look: ${lightingArtifacts}`,
+    noLogoLine,
+    `--ar ${ar}`
+  ]
+    .map((s) => cleanSentence(s))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-IDENTITY RULES (critical):
-- Keep the main subject as the same person as in the user's face photo (identity consistency).
-- Do NOT perform a hard face swap. Integrate naturally.
-- Preserve key facial structure from the user's face photo (eyes/nose/mouth proportions, jawline, cheekbones), while matching the reference scene’s pose, head orientation, and expression intensity.
-- Match lighting direction, shadow falloff, color temperature, skin texture, perspective, and depth of field to the reference scene so the face belongs in the scene.
-- The user's face photo must NOT influence background, clothing, camera style, or lighting of the scene—ONLY identity.
-
-SCENE (from analysis):
-${analysis.environmentDescription}
-
-PEOPLE / SUBJECT (from analysis):
-${analysis.personDescription}
-
-OBJECTS / KEY ELEMENTS (from analysis):
-${analysis.objectsDescription}
-
-IMAGE ATTRIBUTES (from analysis):
-- Type / Style: ${analysis.type}, ${analysis.style}
-- Lighting: ${analysis.lighting}
-- Composition: ${analysis.composition}
-- Colors: ${analysis.colors}
-- Mood: ${analysis.mood}
-- Realism: ${analysis.realism}
-
-${detailDirectives}
-
-${buildClothingPolicy()}
-
-SUBJECT DESCRIPTION (must be explicit, do not be vague):
-- Subject placement in frame: describe whether subject is left/center/right, close-up/medium/full-body.
-- Pose: specify stance/sitting, weight distribution, arm positions, hand positions, shoulder angle.
-- Head: specify tilt left/right (degrees if possible), chin up/down, gaze direction, expression intensity.
-- Outfit: list each garment (outerwear/top/bottom/shoes), material, fit, color; logos only if legible; otherwise write "logo not legible".
-
-ENVIRONMENT DESCRIPTION (must be explicit, do not be vague):
-- List 8–15 environmental elements (foreground/midground/background) and where they are located (left/right/behind/above/below).
-- Describe ground/floor texture, reflections, weather conditions, haze/smoke if any.
-- Describe light sources and reflections on major surfaces.
-
-CAMERA / PHOTOGRAPHY (must be explicit):
-- Shot type: close-up / medium / full body.
-- Lens: choose one (24mm / 35mm / 50mm / 85mm) that matches the reference.
-- Depth of field: low/medium/high + bokeh description.
-- Camera angle: eye-level / high angle / low angle.
-- Lighting: key/fill/rim directions consistent with reference.
-
-${vehicleDirective}
-
-NEGATIVE PROMPT:
-${negative}
-`.trim();
+  return `${body} ${FACE_LOCK_SUFFIX}`.trim();
 }
 
 /* ------------------------------------------------------------------ */
@@ -315,7 +293,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   const imageWidth = Number(data?.metadata?.width);
   const imageHeight = Number(data?.metadata?.height);
 
-  // ----------- PERSON / FACES -----------
   const faces = data.faces || [];
   const personDescription =
     faces
@@ -329,7 +306,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
       })
       .join('\n') || 'No faces detected';
 
-  // ----------- OBJECTS -----------
   const objects = data.objects || [];
   const objectsDescription =
     objects
@@ -343,7 +319,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
       })
       .join('\n') || 'No prominent objects detected';
 
-  // ----------- ENVIRONMENT / SCENE -----------
   const caption = data.description?.captions?.[0]?.text || '';
   const tags = data.tags?.map((t: any) => t.name) || [];
   const tagsText = tags.join(', ').toLowerCase();
@@ -354,7 +329,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   if (tags.length) environmentDescription += `Tags: ${tagsText}. `;
   if (data.categories?.length) environmentDescription += `Categories: ${data.categories.map((c: any) => c.name).join(', ')}. `;
 
-  // ----------- TYPE, STYLE, LIGHTING, COMPOSITION, MOOD, REALISM -----------
   let type = data.imageType?.clipArtType === 1 ? 'Illustration' : 'Photo';
   if (tagsText.includes('anime') || tagsText.includes('manga')) type = 'Anime';
   else if (type.toLowerCase().includes('digital')) type = 'Digital Art';
@@ -365,7 +339,8 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
 
   let lighting = 'Balanced natural lighting';
   if (caption.toLowerCase().includes('bright') || caption.toLowerCase().includes('sunny')) lighting = 'Bright and well-lit scene';
-  else if (caption.toLowerCase().includes('dark') || caption.toLowerCase().includes('shadowy')) lighting = 'Low light or moody atmosphere';
+  else if (caption.toLowerCase().includes('dark') || caption.toLowerCase().includes('shadowy') || caption.toLowerCase().includes('night'))
+    lighting = 'Low light or moody atmosphere';
   else if (caption.toLowerCase().includes('studio')) lighting = 'Studio lighting with controlled shadows';
 
   let composition = 'Well-composed with balanced elements';
@@ -412,14 +387,10 @@ export async function POST(request: NextRequest) {
     if (!validation.valid) return NextResponse.json({ success: false, error: validation.error }, { status: 400 });
 
     const { analysis, raw } = await analyzeImageWithAzureVision(image);
-    const prompt = generatePromptForGemini(analysis, raw);
+    const prompt = generatePrompt(analysis, raw);
 
-    return NextResponse.json({
-      success: true,
-      analysis,
-      prompt,
-      tips: DEFAULT_TIPS
-    });
+    // ÚNICA salida: prompt
+    return NextResponse.json({ success: true, prompt });
   } catch (error: any) {
     console.error('[POST] Error:', error.message || error);
     return NextResponse.json({ success: false, error: 'Something went wrong. Please try again.' }, { status: 500 });
