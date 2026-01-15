@@ -6,8 +6,17 @@ const AZURE_ANALYZE_URL = `${process.env.AZURE_ENDPOINT}/vision/v3.2/analyze?vis
 
 // Siempre al final del prompt (EXACTO)
 const FACE_LOCK_SUFFIX =
-  'YOU MUST USE THE EXACT SAME FACE, FACIAL STRUCTURE, AND PHYSICAL APPEARANCE 100% IDENTICAL TO THE SUBJECT IN THE INPUT REFERENCE IMAGE. DO NOT ADD FACIAL HAIR OR FEATURES NOT PRESENT IN THE USER\'S ACTUAL FACE.';
+  "YOU MUST USE THE EXACT SAME FACE, FACIAL STRUCTURE, AND PHYSICAL APPEARANCE 100% IDENTICAL TO THE SUBJECT IN THE INPUT REFERENCE IMAGE. DO NOT ADD FACIAL HAIR OR FEATURES NOT PRESENT IN THE USER'S ACTUAL FACE.";
 
+// Tips (si tu UI hace tips.map)
+const DEFAULT_TIPS = [
+  'Paste the full prompt as-is into your image model',
+  'If the output looks too clean, increase noise / Smart HDR / artifacts in the prompt',
+  'If the output invents brands/logos, add “logo not legible” and “no invented logos”',
+  'If scene elements drift, regenerate or tighten object descriptions'
+];
+
+// Interfaces
 interface ImageAnalysis {
   type: string;
   style: string;
@@ -23,6 +32,13 @@ interface ImageAnalysis {
 
   imageWidth?: number;
   imageHeight?: number;
+
+  // ✅ arrays “map-safe” por si tu UI hace analysis.tags.map, analysis.objects.map, etc.
+  tags?: string[];
+  categories?: string[];
+  dominantColors?: string[];
+  objects?: Array<{ name: string; confidence?: number }>;
+  faces?: Array<{ age?: number; gender?: string; left?: number; top?: number; width?: number; height?: number }>;
 }
 
 // Validación de base64
@@ -46,7 +62,9 @@ function base64ToArrayBuffer(base64: string) {
   return bytes;
 }
 
-/* ---------------------- helpers ---------------------- */
+/* ------------------------------------------------------------------ */
+/* ---------------------- PROMPT HELPERS ----------------------------- */
+/* ------------------------------------------------------------------ */
 
 type Rect = { left: number; top: number; width: number; height: number };
 
@@ -75,6 +93,7 @@ function arFromDims(w?: number, h?: number): string {
   if (!w || !h || w <= 0 || h <= 0) return '1:1';
 
   const r = w / h;
+
   const candidates: Array<{ label: string; value: number }> = [
     { label: '9:16', value: 9 / 16 },
     { label: '3:4', value: 3 / 4 },
@@ -133,7 +152,9 @@ function safeJoinSentences(parts: string[]) {
     .trim();
 }
 
-/* ------------------- prompt ------------------- */
+/* ------------------------------------------------------------------ */
+/* ------------------- PROMPT GENERATION ----------------------------- */
+/* ------------------------------------------------------------------ */
 
 function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
   const w = analysis.imageWidth;
@@ -149,6 +170,7 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
   const orientationHint =
     ar === '9:16' ? 'A candid, vertical smartphone photo.' : ar === '16:9' ? 'A candid, horizontal smartphone photo.' : 'A candid smartphone photo.';
 
+  // Mantengo tu estilo “Shot on iPhone...”
   const cameraLine = 'Shot on iPhone 15 Pro.';
 
   const isLowLight =
@@ -169,6 +191,7 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
         'Subtle lens flare or glare may appear if strong light hits the lens'
       ]);
 
+  // Subject (sin inventar rasgos)
   const faces = Array.isArray(azureRaw?.faces) ? azureRaw.faces : [];
   let subjectSentence = 'The main subject is a person.';
   if (faces.length > 0) {
@@ -188,6 +211,7 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
     subjectSentence = meta ? `The main subject is a person (${meta}).` : 'The main subject is a person.';
   }
 
+  // Objects (sin marcas)
   const rawObjects = Array.isArray(azureRaw?.objects) ? azureRaw.objects : [];
   const objectsTop = rawObjects.slice(0, 10).map((o: any) => {
     const rect = getRect(o);
@@ -236,11 +260,13 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // SIEMPRE lo último del prompt:
+  // ✅ SIEMPRE lo último del prompt:
   return `${body} ${FACE_LOCK_SUFFIX}`.trim();
 }
 
-/* ------------------- Azure analyze ------------------- */
+/* ------------------------------------------------------------------ */
+/* ----------------------- AZURE ANALYZE ----------------------------- */
+/* ------------------------------------------------------------------ */
 
 async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analysis: ImageAnalysis; raw: any }> {
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
@@ -267,6 +293,30 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   const imageWidth = Number(data?.metadata?.width);
   const imageHeight = Number(data?.metadata?.height);
 
+  // Safe arrays (map-safe)
+  const tagsArr: string[] = Array.isArray(data?.tags) ? data.tags.map((t: any) => String(t?.name || '')).filter(Boolean) : [];
+  const categoriesArr: string[] = Array.isArray(data?.categories) ? data.categories.map((c: any) => String(c?.name || '')).filter(Boolean) : [];
+  const dominantColorsArr: string[] = Array.isArray(data?.color?.dominantColors) ? data.color.dominantColors.map((c: any) => String(c)) : [];
+
+  const objectsArr: Array<{ name: string; confidence?: number }> = Array.isArray(data?.objects)
+    ? data.objects.map((o: any) => ({
+        name: String(o?.object || 'object'),
+        confidence: typeof o?.confidence === 'number' ? o.confidence : undefined
+      }))
+    : [];
+
+  const facesArr: Array<{ age?: number; gender?: string; left?: number; top?: number; width?: number; height?: number }> = Array.isArray(data?.faces)
+    ? data.faces.map((f: any) => ({
+        age: typeof f?.age === 'number' ? f.age : undefined,
+        gender: f?.gender ? String(f.gender) : undefined,
+        left: typeof f?.faceRectangle?.left === 'number' ? f.faceRectangle.left : undefined,
+        top: typeof f?.faceRectangle?.top === 'number' ? f.faceRectangle.top : undefined,
+        width: typeof f?.faceRectangle?.width === 'number' ? f.faceRectangle.width : undefined,
+        height: typeof f?.faceRectangle?.height === 'number' ? f.faceRectangle.height : undefined
+      }))
+    : [];
+
+  // ----------- PERSON / FACES (string legacy) -----------
   const faces = data.faces || [];
   const personDescription =
     faces
@@ -280,6 +330,7 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
       })
       .join('\n') || 'No faces detected';
 
+  // ----------- OBJECTS (string legacy) -----------
   const objects = data.objects || [];
   const objectsDescription =
     objects
@@ -293,16 +344,16 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
       })
       .join('\n') || 'No prominent objects detected';
 
+  // ----------- ENVIRONMENT / SCENE -----------
   const caption = data.description?.captions?.[0]?.text || '';
-  const tags = data.tags?.map((t: any) => t.name) || [];
-  const tagsText = tags.join(', ').toLowerCase();
-  const dominantColors = data.color?.dominantColors || [];
+  const tagsText = tagsArr.join(', ').toLowerCase();
 
   let environmentDescription = `Scene summary: ${caption}. `;
-  if (dominantColors.length) environmentDescription += `Dominant colors: ${dominantColors.join(', ')}. `;
-  if (tags.length) environmentDescription += `Tags: ${tagsText}. `;
-  if (data.categories?.length) environmentDescription += `Categories: ${data.categories.map((c: any) => c.name).join(', ')}. `;
+  if (dominantColorsArr.length) environmentDescription += `Dominant colors: ${dominantColorsArr.join(', ')}. `;
+  if (tagsArr.length) environmentDescription += `Tags: ${tagsText}. `;
+  if (categoriesArr.length) environmentDescription += `Categories: ${categoriesArr.join(', ')}. `;
 
+  // ----------- TYPE, STYLE, LIGHTING, COMPOSITION, MOOD, REALISM -----------
   let type = data.imageType?.clipArtType === 1 ? 'Illustration' : 'Photo';
   if (tagsText.includes('anime') || tagsText.includes('manga')) type = 'Anime';
   else if (type.toLowerCase().includes('digital')) type = 'Digital Art';
@@ -313,21 +364,16 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
 
   let lighting = 'Balanced natural lighting';
   if (caption.toLowerCase().includes('bright') || caption.toLowerCase().includes('sunny')) lighting = 'Bright and well-lit scene';
-  else if (
-    caption.toLowerCase().includes('dark') ||
-    caption.toLowerCase().includes('shadowy') ||
-    caption.toLowerCase().includes('night')
-  )
+  else if (caption.toLowerCase().includes('dark') || caption.toLowerCase().includes('shadowy') || caption.toLowerCase().includes('night'))
     lighting = 'Low light or moody atmosphere';
   else if (caption.toLowerCase().includes('studio')) lighting = 'Studio lighting with controlled shadows';
 
   let composition = 'Well-composed with balanced elements';
   if (caption.toLowerCase().includes('close-up') || tagsText.includes('close-up')) composition = 'Close-up shot';
-  else if (caption.toLowerCase().includes('centered') || caption.toLowerCase().includes('center'))
-    composition = 'Centered subject with balanced framing';
+  else if (caption.toLowerCase().includes('centered') || caption.toLowerCase().includes('center')) composition = 'Centered subject with balanced framing';
 
   let colors = 'Natural and balanced color palette';
-  if (dominantColors.length) colors = `Color palette featuring: ${dominantColors.join(', ')}`;
+  if (dominantColorsArr.length) colors = `Color palette featuring: ${dominantColorsArr.join(', ')}`;
 
   let mood = 'Neutral and balanced';
   if (caption.toLowerCase().includes('happy') || caption.toLowerCase().includes('smile')) mood = 'Cheerful and positive';
@@ -350,13 +396,22 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
     objectsDescription,
     environmentDescription,
     imageWidth: Number.isFinite(imageWidth) ? imageWidth : undefined,
-    imageHeight: Number.isFinite(imageHeight) ? imageHeight : undefined
+    imageHeight: Number.isFinite(imageHeight) ? imageHeight : undefined,
+
+    // ✅ map-safe
+    tags: tagsArr,
+    categories: categoriesArr,
+    dominantColors: dominantColorsArr,
+    objects: objectsArr,
+    faces: facesArr
   };
 
   return { analysis, raw: data };
 }
 
-/* ------------------- handlers ------------------- */
+/* ------------------------------------------------------------------ */
+/* ---------------------------- HANDLERS ----------------------------- */
+/* ------------------------------------------------------------------ */
 
 export async function POST(request: NextRequest) {
   try {
@@ -369,21 +424,18 @@ export async function POST(request: NextRequest) {
     const { analysis, raw } = await analyzeImageWithAzureVision(image);
     const prompt = generatePrompt(analysis, raw);
 
-    // ✅ COMPATIBILIDAD: devolvemos analysis (para que tu UI no rompa),
-    // pero tu “función única” sigue siendo el prompt.
-    // Si tu frontend ya no usa analysis, puedes borrarlo sin problema.
+    /**
+     * ✅ Respuesta retrocompatible:
+     * - prompt (lo que te importa)
+     * - analysis (por si tu UI usa analysis.type, etc.)
+     * - tips (por si tu UI hace tips.map)
+     * - además arrays “map-safe” duplicados arriba en analysis
+     */
     return NextResponse.json({
       success: true,
       prompt,
-      analysis: {
-        type: analysis.type,
-        style: analysis.style,
-        lighting: analysis.lighting,
-        composition: analysis.composition,
-        colors: analysis.colors,
-        mood: analysis.mood,
-        realism: analysis.realism
-      }
+      analysis,
+      tips: DEFAULT_TIPS
     });
   } catch (error: any) {
     console.error('[POST] Error:', error.message || error);
