@@ -8,7 +8,6 @@ const AZURE_ANALYZE_URL = `${process.env.AZURE_ENDPOINT}/vision/v3.2/analyze?vis
 const FACE_LOCK_SUFFIX =
   'YOU MUST USE THE EXACT SAME FACE, FACIAL STRUCTURE, AND PHYSICAL APPEARANCE 100% IDENTICAL TO THE SUBJECT IN THE INPUT REFERENCE IMAGE. DO NOT ADD FACIAL HAIR OR FEATURES NOT PRESENT IN THE USER\'S ACTUAL FACE.';
 
-// Interfaces
 interface ImageAnalysis {
   type: string;
   style: string;
@@ -18,7 +17,6 @@ interface ImageAnalysis {
   mood: string;
   realism: string;
 
-  // Raw-ish description strings (kept for compatibility)
   personDescription: string;
   objectsDescription: string;
   environmentDescription: string;
@@ -48,9 +46,7 @@ function base64ToArrayBuffer(base64: string) {
   return bytes;
 }
 
-/* ------------------------------------------------------------------ */
-/* ---------------------- PROMPT HELPERS ----------------------------- */
-/* ------------------------------------------------------------------ */
+/* ---------------------- helpers ---------------------- */
 
 type Rect = { left: number; top: number; width: number; height: number };
 
@@ -79,7 +75,6 @@ function arFromDims(w?: number, h?: number): string {
   if (!w || !h || w <= 0 || h <= 0) return '1:1';
 
   const r = w / h;
-
   const candidates: Array<{ label: string; value: number }> = [
     { label: '9:16', value: 9 / 16 },
     { label: '3:4', value: 3 / 4 },
@@ -138,37 +133,24 @@ function safeJoinSentences(parts: string[]) {
     .trim();
 }
 
-/* ------------------------------------------------------------------ */
-/* ------------------- PROMPT GENERATION (SIMPLIFIED) ---------------- */
-/* ------------------------------------------------------------------ */
+/* ------------------- prompt ------------------- */
 
-/**
- * Objetivo: un único prompt final, “Shot on iPhone...”,
- * centrado en describir la foto fielmente con artefactos realistas.
- * NO devuelve tips, NO devuelve analysis al cliente, solo prompt.
- *
- * Importante:
- * - No inventar marcas/logos no confirmables. (Se evita añadir marcas.)
- * - El mensaje FACE_LOCK_SUFFIX debe ir SIEMPRE AL FINAL del prompt.
- * - --ar se coloca ANTES del mensaje final para que el mensaje sea lo último.
- */
 function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
   const w = analysis.imageWidth;
   const h = analysis.imageHeight;
   const ar = arFromDims(w, h);
 
   const caption = cleanSentence(azureRaw?.description?.captions?.[0]?.text || '');
-  const tags: string[] = Array.isArray(azureRaw?.tags) ? azureRaw.tags.map((t: any) => String(t?.name || '')).filter(Boolean) : [];
+  const tags: string[] = Array.isArray(azureRaw?.tags)
+    ? azureRaw.tags.map((t: any) => String(t?.name || '')).filter(Boolean)
+    : [];
   const tagsLower = tags.join(', ').toLowerCase();
 
-  // Vertical/horizontal hint (como tus ejemplos)
   const orientationHint =
     ar === '9:16' ? 'A candid, vertical smartphone photo.' : ar === '16:9' ? 'A candid, horizontal smartphone photo.' : 'A candid smartphone photo.';
 
-  // “Shot on iPhone...” constante (tus ejemplos) — sin inventar más metadata.
   const cameraLine = 'Shot on iPhone 15 Pro.';
 
-  // Heurísticas simples (sin inventar escena; solo “look & feel”)
   const isLowLight =
     analysis.lighting.toLowerCase().includes('low') ||
     analysis.lighting.toLowerCase().includes('dark') ||
@@ -187,11 +169,9 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
         'Subtle lens flare or glare may appear if strong light hits the lens'
       ]);
 
-  // Subject (sin rasgos inventados)
   const faces = Array.isArray(azureRaw?.faces) ? azureRaw.faces : [];
   let subjectSentence = 'The main subject is a person.';
   if (faces.length > 0) {
-    // Elegir cara “principal” por tamaño
     let best = faces[0];
     let bestArea = -1;
     for (const f of faces) {
@@ -208,7 +188,6 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
     subjectSentence = meta ? `The main subject is a person (${meta}).` : 'The main subject is a person.';
   }
 
-  // Objects (máximo 10, con posición; sin marcas)
   const rawObjects = Array.isArray(azureRaw?.objects) ? azureRaw.objects : [];
   const objectsTop = rawObjects.slice(0, 10).map((o: any) => {
     const rect = getRect(o);
@@ -223,14 +202,12 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
       ? `Key elements visible: ${objectsTop.join(', ')}.`
       : 'Key elements are not clearly identifiable beyond the main subject.';
 
-  // Scene context (caption + environmentDescription; limpiando duplicaciones)
   const env = cleanSentence(analysis.environmentDescription);
   const sceneSentence = safeJoinSentences([
     caption ? `Scene: ${caption}` : '',
     env ? `Additional scene context: ${env}` : ''
   ]);
 
-  // Style block (sin adornos raros)
   const styleSentence = safeJoinSentences([
     orientationHint,
     cleanSentence(analysis.style),
@@ -241,10 +218,8 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
     `Realism: ${cleanSentence(analysis.realism)}`
   ]);
 
-  // No inventar logos
   const noLogoLine = 'If any logos or text are present, keep them not legible and do not invent any new logos or brand marks.';
 
-  // Construcción final (mensaje SIEMPRE al final)
   const body = [
     cameraLine,
     styleSentence,
@@ -261,12 +236,11 @@ function generatePrompt(analysis: ImageAnalysis, azureRaw?: any): string {
     .replace(/\s+/g, ' ')
     .trim();
 
+  // SIEMPRE lo último del prompt:
   return `${body} ${FACE_LOCK_SUFFIX}`.trim();
 }
 
-/* ------------------------------------------------------------------ */
-/* ----------------------- AZURE ANALYZE (EXISTING) ------------------- */
-/* ------------------------------------------------------------------ */
+/* ------------------- Azure analyze ------------------- */
 
 async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analysis: ImageAnalysis; raw: any }> {
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
@@ -339,13 +313,18 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
 
   let lighting = 'Balanced natural lighting';
   if (caption.toLowerCase().includes('bright') || caption.toLowerCase().includes('sunny')) lighting = 'Bright and well-lit scene';
-  else if (caption.toLowerCase().includes('dark') || caption.toLowerCase().includes('shadowy') || caption.toLowerCase().includes('night'))
+  else if (
+    caption.toLowerCase().includes('dark') ||
+    caption.toLowerCase().includes('shadowy') ||
+    caption.toLowerCase().includes('night')
+  )
     lighting = 'Low light or moody atmosphere';
   else if (caption.toLowerCase().includes('studio')) lighting = 'Studio lighting with controlled shadows';
 
   let composition = 'Well-composed with balanced elements';
   if (caption.toLowerCase().includes('close-up') || tagsText.includes('close-up')) composition = 'Close-up shot';
-  else if (caption.toLowerCase().includes('centered') || caption.toLowerCase().includes('center')) composition = 'Centered subject with balanced framing';
+  else if (caption.toLowerCase().includes('centered') || caption.toLowerCase().includes('center'))
+    composition = 'Centered subject with balanced framing';
 
   let colors = 'Natural and balanced color palette';
   if (dominantColors.length) colors = `Color palette featuring: ${dominantColors.join(', ')}`;
@@ -377,7 +356,8 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   return { analysis, raw: data };
 }
 
-// POST handler
+/* ------------------- handlers ------------------- */
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -389,15 +369,28 @@ export async function POST(request: NextRequest) {
     const { analysis, raw } = await analyzeImageWithAzureVision(image);
     const prompt = generatePrompt(analysis, raw);
 
-    // ÚNICA salida: prompt
-    return NextResponse.json({ success: true, prompt });
+    // ✅ COMPATIBILIDAD: devolvemos analysis (para que tu UI no rompa),
+    // pero tu “función única” sigue siendo el prompt.
+    // Si tu frontend ya no usa analysis, puedes borrarlo sin problema.
+    return NextResponse.json({
+      success: true,
+      prompt,
+      analysis: {
+        type: analysis.type,
+        style: analysis.style,
+        lighting: analysis.lighting,
+        composition: analysis.composition,
+        colors: analysis.colors,
+        mood: analysis.mood,
+        realism: analysis.realism
+      }
+    });
   } catch (error: any) {
     console.error('[POST] Error:', error.message || error);
     return NextResponse.json({ success: false, error: 'Something went wrong. Please try again.' }, { status: 500 });
   }
 }
 
-// OPTIONS handler (CORS)
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 200,
