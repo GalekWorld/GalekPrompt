@@ -26,11 +26,11 @@ interface ImageAnalysis {
 }
 
 const DEFAULT_TIPS = [
-  'Upload a clear photo of your face first in Gemini',
-  'The prompt uses [USER FACE] placeholder - Gemini will use your uploaded photo',
-  'Paste entire prompt as-is, do not edit it',
-  'If results are not perfect, try regenerating the prompt',
-  'For best results, use a well-lit, front-facing photo of your face'
+  'In Gemini, upload TWO images: (1) the reference scene image (Pinterest), and (2) a clear face photo of you',
+  'Paste the entire prompt as-is, do not edit it',
+  'Your face photo is used ONLY as identity reference (not as a background/style reference)',
+  'For best results, use a well-lit, front-facing face photo with neutral expression',
+  'If results are not perfect, try regenerating the prompt'
 ];
 
 // Validación de base64
@@ -89,9 +89,7 @@ function describeRectPosition(r: Rect, imgW?: number, imgH?: number) {
     nx = cx / imgW;
     ny = cy / imgH;
   } else {
-    // Fallback: treat coords as already "roughly normalized" (not true),
-    // but still yields stable bucketization in many cases.
-    // We'll clamp to [0,1] using a soft scale guess.
+    // Fallback heuristic
     nx = Math.max(0, Math.min(1, cx / 1000));
     ny = Math.max(0, Math.min(1, cy / 1000));
   }
@@ -118,7 +116,7 @@ function extractMainFaceRectFromAzureData(data: any): Rect | null {
 
 function buildNegativePrompt(extra?: string[]) {
   const base = [
-    // Identity / face
+    // Identity / face quality
     'no double face',
     'no duplicated head',
     'no face distortion',
@@ -129,6 +127,7 @@ function buildNegativePrompt(extra?: string[]) {
     'no uncanny skin',
     'no plastic skin',
     'no waxy skin',
+
     // Hands / anatomy
     'no extra fingers',
     'no missing fingers',
@@ -136,22 +135,25 @@ function buildNegativePrompt(extra?: string[]) {
     'no deformed hands',
     'no broken wrists',
     'no malformed anatomy',
+
     // Text / logos
     'no gibberish text',
     'no random letters',
     'no invented logos',
     'no fake brand marks',
+
     // Quality / artifacts
     'no low resolution',
-    'no blurry subject',
     'no heavy noise',
     'no jpeg artifacts',
     'no oversharpening halos',
-    // Unwanted changes
-    'do not change the original outfit',
-    'do not change the original pose',
+
+    // Unwanted changes (relaxed to allow natural integration)
     'do not change the environment',
+    'do not change the overall outfit style or colors (minor fit adjustments allowed if needed for realism)',
+    'do not change the overall pose and body posture (minor natural adjustments allowed for realism)',
     'do not change the lighting direction',
+
     // Style (for realism)
     'no cartoon',
     'no anime',
@@ -172,9 +174,8 @@ Clothing & brands policy:
 `.trim();
 }
 
-// Generar prompt ultra detallado + negativos (NEW)
+// Generar prompt ultra detallado + negativos (UPDATED)
 function generatePromptForGemini(analysis: ImageAnalysis, azureRaw?: any): string {
-  // If we have raw Azure response, we can do slightly better at selecting face rect.
   const mainFaceRect = azureRaw ? extractMainFaceRectFromAzureData(azureRaw) : null;
   const facePos = mainFaceRect
     ? describeRectPosition(mainFaceRect, analysis.imageWidth, analysis.imageHeight)
@@ -208,28 +209,42 @@ Vehicles:
 - If there is no vehicle visible, do not invent one.
 `.trim();
 
-  const negative = buildNegativePrompt();
+  const negative = buildNegativePrompt([
+    // Explicit anti-hard-swap constraints
+    'no hard face swap look',
+    'no pasted-on face',
+    'no mismatched skin tone between face and neck',
+    'no wrong lighting on the face',
+    'no identity drift (keep the user identity consistent)',
+    'do not alter other people in the scene'
+  ]);
 
   return `
 You will be given:
-(1) A reference scene image.
-(2) A separate face photo of the user.
+(1) A reference scene image (Pinterest / target scene).
+(2) A separate face photo of the user (identity reference only).
 
 TASK:
-Create a new image that matches the reference scene as closely as possible, but with the user's face integrated onto the main subject (face-swap). Keep everything else consistent.
+Create a new image that matches the reference scene as closely as possible.
+Use the user's face photo ONLY to guide the identity of the main subject in the scene.
+The final result must look like a real photo taken in the reference scene, not like a pasted face.
 
-IDENTITY / FACE SWAP RULES (critical):
-- Replace ONLY the face of the main subject with the user's face from the provided face photo.
-- Preserve the original subject's pose, head orientation, expression intensity, body proportions, hairstyle silhouette (unless the face photo clearly requires otherwise), and overall realism.
-- Match lighting direction, shadow falloff, skin texture, and perspective so the face looks naturally part of the scene.
-- Do not change the environment, wardrobe, props, or composition.
+MAIN SUBJECT SELECTION:
+- The "main subject" is the person whose face is located at: ${facePos}.
+- If multiple people are present, apply the user's identity ONLY to the main subject. Do not change other people.
+
+IDENTITY RULES (critical):
+- Keep the main subject as the same person as in the user's face photo (identity consistency).
+- Do NOT perform a hard face swap. Integrate naturally.
+- Preserve key facial structure from the user's face photo (eyes/nose/mouth proportions, jawline, cheekbones), while matching the reference scene’s pose, head orientation, and expression intensity.
+- Match lighting direction, shadow falloff, color temperature, skin texture, perspective, and depth of field to the reference scene so the face belongs in the scene.
+- The user's face photo must NOT influence background, clothing, camera style, or lighting of the scene—ONLY identity.
 
 SCENE (from analysis):
 ${analysis.environmentDescription}
 
 PEOPLE / SUBJECT (from analysis):
 ${analysis.personDescription}
-Main subject face position (approx): ${facePos}
 
 OBJECTS / KEY ELEMENTS (from analysis):
 ${analysis.objectsDescription}
@@ -249,7 +264,7 @@ ${buildClothingPolicy()}
 SUBJECT DESCRIPTION (must be explicit, do not be vague):
 - Subject placement in frame: describe whether subject is left/center/right, close-up/medium/full-body.
 - Pose: specify stance/sitting, weight distribution, arm positions, hand positions, shoulder angle.
-- Head: specify tilt left/right (degrees if possible), chin up/down, gaze direction, expression.
+- Head: specify tilt left/right (degrees if possible), chin up/down, gaze direction, expression intensity.
 - Outfit: list each garment (outerwear/top/bottom/shoes), material, fit, color; logos only if legible; otherwise write "logo not legible".
 
 ENVIRONMENT DESCRIPTION (must be explicit, do not be vague):
@@ -275,7 +290,6 @@ ${negative}
 /* ----------------------- AZURE ANALYZE (EXISTING) ------------------- */
 /* ------------------------------------------------------------------ */
 
-// Analizar imagen con Azure Vision
 async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analysis: ImageAnalysis; raw: any }> {
   const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
   const imageBuffer = base64ToArrayBuffer(base64Data);
@@ -298,7 +312,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   const data = await response.json();
   if (!data) throw new Error('Azure Vision API returned empty response');
 
-  // metadata (often present)
   const imageWidth = Number(data?.metadata?.width);
   const imageHeight = Number(data?.metadata?.height);
 
@@ -307,7 +320,9 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   const personDescription =
     faces
       .map((f: any, i: number) => {
-        const emotions = f.emotion ? Object.entries(f.emotion).sort((a, b) => (b[1] as number) - (a[1] as number))[0][0] : '';
+        const emotions = f.emotion
+          ? Object.entries(f.emotion).sort((a, b) => (b[1] as number) - (a[1] as number))[0][0]
+          : '';
         const fr = f.faceRectangle;
         const rectStr = fr ? `[${fr.left},${fr.top},${fr.width},${fr.height}]` : '[unknown]';
         return `Person ${i + 1}: Age ${f.age}, ${f.gender}, emotion: ${emotions || 'unknown'}, face rectangle ${rectStr}`;
@@ -319,7 +334,6 @@ async function analyzeImageWithAzureVision(imageBase64: string): Promise<{ analy
   const objectsDescription =
     objects
       .map((o: any) => {
-        // rectangle may be {x,y,w,h}
         const r = o.rectangle || {};
         const left = r.left ?? r.x ?? 0;
         const top = r.top ?? r.y ?? 0;
