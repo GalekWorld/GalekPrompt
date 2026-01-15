@@ -50,7 +50,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing OPENAI_API_KEY' }, { status: 500 });
     }
 
-    const client = new OpenAI({ apiKey });
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY!,
+      baseURL: 'https://api.openai.com/v1'
+    });
 
     // Instrucciones: prompt único, hiper fiel, sin inventar marcas/textos
     const system = [
